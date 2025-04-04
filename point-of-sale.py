@@ -565,8 +565,11 @@ class POSApp:
         # Pass the employee_id to create_purchase
         transaction_id = self.db.create_purchase(parts_sold, self.store_id, employee_id)
         if transaction_id:
-            total = sum(part.total_price for part in parts_sold)
-            messagebox.showinfo("Total", f"Total Amount: ${total:.2f}")
+            subtotal = sum(part.total_price for part in parts_sold)
+            tax_rate = self.db.get_store_tax_rate(self.store_id) or 0.0  # Fetch tax rate for the store, default to 0.0
+            tax_amount = round(subtotal * tax_rate, 2)
+            total = round(subtotal + tax_amount, 2)
+            messagebox.showinfo("Total", f"Subtotal: ${subtotal:.2f}\nTax: ${tax_amount:.2f}\nTotal: ${total:.2f}")
             self.cart.clear()
             self.update_cart_display()
             self.load_items()  # Refresh items after purchase

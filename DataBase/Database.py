@@ -971,3 +971,88 @@ class Database:
         except sqlite3.Error as e:
             print(f"Error updating store balance: {e}")
             return False
+
+    def get_store_tax_rate(self, store_id):
+        """Fetch the tax rate for a given store."""
+        self.cursor.execute("SELECT tax_rate FROM stores WHERE store_id = ?", (store_id,))
+        result = self.cursor.fetchone()
+        return result[0] if result else 0.0
+
+    def create_purchase(self, parts: List[PartSold], store_id: int, employee_id: int = 1) -> int:
+        """
+        Create a purchase transaction for multiple parts.
+
+        Args:
+            parts (List[PartSold]): A list of `PartSold` objects, where each object contains:
+                                    - name: Part name (str)
+                                    - quantity: Quantity to purchase (int)
+                                    - unit_price: Unit price of the part (float)
+            store_id (int): The ID of the store where the purchase is made.
+            employee_id (int): The ID of the employee processing the purchase.
+
+        Returns:
+            int: The transaction ID of the created purchase.
+        """
+        try:
+            # Get store's tax rate
+            tax_rate = self.get_store_tax_rate(store_id)
+            total_price = 0.0
+            transaction_id = None
+
+            # Create a transaction
+            self.cursor.execute(
+                "INSERT INTO transactions (employee_id, store_id, total_price) VALUES (?, ?, ?)",
+                (employee_id, store_id, 0.0)
+            )
+            transaction_id = self.cursor.lastrowid
+
+            for part in parts:
+                # Fetch pno if not provided
+                self.cursor.execute("SELECT pno, quantity FROM parts WHERE name = ? AND store_id = ?", (part.name, store_id))
+                result = self.cursor.fetchone()
+
+                if result:
+                    pno, current_quantity = result
+
+                    if current_quantity >= part.quantity:
+                        new_quantity = current_quantity - part.quantity
+                        part_total_price = part.unit_price * part.quantity
+                        total_price += part_total_price
+
+                        # Add transaction details
+                        self.cursor.execute(
+                            "INSERT INTO transaction_details (transaction_id, part_id, quantity) VALUES (?, ?, ?)",
+                            (transaction_id, pno, part.quantity)
+                        )
+
+                        # Update the quantity of the part in the store
+                        self.cursor.execute(
+                            "UPDATE parts SET quantity = ? WHERE pno = ? AND store_id = ?",
+                            (new_quantity, pno, store_id)
+                        )
+                    else:
+                        print(f"Insufficient quantity for part '{part.name}'. Available: {current_quantity}, Requested: {part.quantity}.")
+                else:
+                    print(f"Part '{part.name}' not found in store {store_id}.")
+
+            # Calculate tax
+            tax_amount = self.format_decimal(total_price * tax_rate)
+            total_with_tax = self.format_decimal(total_price + tax_amount)
+
+            # Update the total price of the transaction
+            self.cursor.execute(
+                "UPDATE transactions SET total_price = ? WHERE transaction_id = ?",
+                (total_with_tax, transaction_id)
+            )
+
+            # Update the store's balance
+            self.update_store_balance(store_id, total_with_tax, is_addition=True)
+
+            self.conn.commit()
+            print(f"Purchase transaction {transaction_id} completed. Subtotal: {total_price:.2f}, Tax: {tax_amount:.2f}, Total: {total_with_tax:.2f}")
+            return transaction_id
+
+        except sqlite3.Error as e:
+            print(f"Error creating purchase: {e}")
+            self.conn.rollback()
+            return None
