@@ -468,7 +468,23 @@ class Database:
             self.conn.rollback()
             return None
 
-    def create_purchase(self, parts: List[PartSold], store_id: int) -> int:
+
+    def create_purchase(self, parts: List[PartSold], store_id: int, employee_id: int) -> int:
+        """
+        Create a purchase transaction for multiple parts.
+
+        Args:
+            parts (List[PartSold]): A list of `PartSold` objects, where each object contains:
+                                    - name: Part name (str)
+                                    - quantity: Quantity to purchase (int)
+                                    - unit_price: Unit price of the part (float)
+            store_id (int): The ID of the store where the purchase is made.
+            employee_id (int): The ID of the employee processing the purchase.
+
+        Returns:
+            int: The transaction ID of the created purchase.
+        """
+
         try:
             # Get store's tax rate
             self.cursor.execute("SELECT tax_rate FROM stores WHERE store_id = ?", (store_id,))
@@ -480,7 +496,8 @@ class Database:
             # Create a transaction
             self.cursor.execute(
                 "INSERT INTO transactions (employee_id, store_id, total_price) VALUES (?, ?, ?)",
-                (1, store_id, 0.0)
+
+                (employee_id, store_id, 0.0)
             )
             transaction_id = self.cursor.lastrowid
 
