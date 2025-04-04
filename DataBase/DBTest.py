@@ -238,5 +238,61 @@ class TestDatabase(unittest.TestCase):
 
         print("test_return_part passed successfully.")
 
+    def test_return_from_transaction(self):
+        """Test returning items from a specific transaction."""
+        # Step 1: Add a store and employee
+        self.db.add_store('Test Store', 500.0)
+        store_id = self.db.get_stores()[0][0]
+        self.db.add_employee('Test', 'Employee', 'Clerk', store_id, 'password')
+
+        # Step 2: Add parts to the store
+        part1_id = self.db.add_part_to_store('Widget', 20.0, store_id, 10)
+        part2_id = self.db.add_part_to_store('Gadget', 15.0, store_id, 8)
+
+        # Step 3: Create a purchase transaction
+        parts_to_purchase = [
+            PartSold(name='Widget', quantity=3, unit_price=20.0, total_price=60.0),
+            PartSold(name='Gadget', quantity=2, unit_price=15.0, total_price=30.0)
+        ]
+        transaction_id = self.db.create_purchase(parts_to_purchase, store_id)
+
+        # Step 4: Verify initial state after purchase
+        parts = self.db.get_parts_by_store(store_id)
+        self.assertEqual(parts[0].quantity, 7)  # Widget: 10 - 3
+        self.assertEqual(parts[1].quantity, 6)  # Gadget: 8 - 2
+        stores = self.db.get_stores()
+        self.assertEqual(stores[0][2], 590.0)  # Initial 500 + Purchase (60 + 30)
+
+        # Step 5: Process return by transaction ID
+        return_transaction_id = self.db.return_by_transaction_id(transaction_id)
+        self.assertIsNotNone(return_transaction_id)
+
+        # Step 6: Verify final state after return
+        parts = self.db.get_parts_by_store(store_id)
+        self.assertEqual(parts[0].quantity, 10)  # Widget: 7 + 3
+        self.assertEqual(parts[1].quantity, 8)   # Gadget: 6 + 2
+
+        stores = self.db.get_stores()
+        self.assertEqual(stores[0][2], 500.0)  # Back to initial balance
+
+        # Step 7: Verify return transaction details
+        return_details = self.db.get_transaction_details(return_transaction_id)
+        self.assertEqual(return_details.total_price, -90.0)  # Negative total for return
+        self.assertEqual(len(return_details.parts_sold), 2)
+
+        # Verify Widget return details
+        self.assertEqual(return_details.parts_sold[0].name, 'Widget')
+        self.assertEqual(return_details.parts_sold[0].quantity, -3)  # Negative quantity for returns
+        self.assertEqual(return_details.parts_sold[0].unit_price, 20.0)
+        self.assertEqual(return_details.parts_sold[0].total_price, -60.0)
+
+        # Verify Gadget return details
+        self.assertEqual(return_details.parts_sold[1].name, 'Gadget')
+        self.assertEqual(return_details.parts_sold[1].quantity, -2)  # Negative quantity for returns
+        self.assertEqual(return_details.parts_sold[1].unit_price, 15.0)
+        self.assertEqual(return_details.parts_sold[1].total_price, -30.0)
+
+        print("test_return_from_transaction passed successfully.")
+
 if __name__ == '__main__':
     unittest.main()

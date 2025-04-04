@@ -647,7 +647,7 @@ class Database:
                 # Calculate the refund for this part
                 part_refund = abs(part.quantity) * part.unit_price
                 total_refund += part_refund
-
+                part.part_id = self.get_part_by_name(part.name, store_id).part_id  # Get the part ID
                 # Add transaction details for the return
                 self.cursor.execute(
                     "INSERT INTO transaction_details (transaction_id, part_id, quantity) VALUES (?, ?, ?)",
@@ -860,3 +860,41 @@ class Database:
         except sqlite3.Error as e:
             print(f"Error fetching parts for store ID {store_id}: {e}")
             return []
+
+    def get_part_by_name(self, name: str, store_id: int) -> Part:
+        """
+        Fetches and returns part details based on part name and store ID.
+
+        Args:
+            name (str): The name of the part to find.
+            store_id (int): The ID of the store where the part is located.
+
+        Returns:
+            Part: A Part object containing the part details.
+
+        Raises:
+            Exception: If the part is not found in the specified store.
+        """
+        try:
+            query = """
+            SELECT pno, name, price, store_id, quantity
+            FROM parts
+            WHERE name = ? AND store_id = ?;
+            """
+            self.cursor.execute(query, (name, store_id))
+            part = self.cursor.fetchone()
+            
+            if not part:
+                raise Exception(f"Part '{name}' not found in store {store_id}")
+                
+            # Return a structured Part object
+            return Part(
+                part_id=part[0],
+                name=part[1],
+                price=part[2],
+                store_id=part[3],
+                quantity=part[4]
+            )
+        except sqlite3.Error as e:
+            print(f"Database error: {e}")
+            raise Exception(f"Error fetching part '{name}' from store {store_id}")
