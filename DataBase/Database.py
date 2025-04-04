@@ -599,6 +599,82 @@ class Database:
             self.conn.rollback()
             return None
 
+    def return_by_transaction_id(self, transaction_id: int) -> int:
+        """
+        Process a return based on a transaction ID.
+
+        Args:
+            transaction_id (int): The ID of the transaction to be returned.
+
+        Returns:
+            int: The transaction ID of the created return transaction.
+        """
+        try:
+            # Fetch the original transaction details
+            transaction_details = self.get_transaction_details(transaction_id)
+
+            if not transaction_details:
+                raise Exception(f"Transaction with ID {transaction_id} not found.")
+
+            store_id = self.cursor.execute(
+                "SELECT store_id FROM transactions WHERE transaction_id = ?", (transaction_id,)
+            ).fetchone()[0]
+
+            total_refund = 0.0
+
+            # Create a new return transaction
+            self.cursor.execute(
+                "INSERT INTO transactions (employee_id, store_id, total_price) VALUES (?, ?, ?)",
+                (1, store_id, 0.0)  # Replace `1` with the actual employee ID
+            )
+            return_transaction_id = self.cursor.lastrowid
+
+            # Process each part in the original transaction
+            for part in transaction_details.parts_sold:
+                # Fetch the current quantity of the part
+                self.cursor.execute(
+                    "SELECT quantity FROM parts WHERE name = ? AND store_id = ?", (part.name, store_id)
+                )
+                current_quantity = self.cursor.fetchone()[0]
+
+                # Update the quantity of the part in the store
+                new_quantity = current_quantity + abs(part.quantity)  # Add the returned quantity
+                self.cursor.execute(
+                    "UPDATE parts SET quantity = ? WHERE name = ? AND store_id = ?",
+                    (new_quantity, part.name, store_id)
+                )
+
+                # Calculate the refund for this part
+                part_refund = abs(part.quantity) * part.unit_price
+                total_refund += part_refund
+
+                # Add transaction details for the return
+                self.cursor.execute(
+                    "INSERT INTO transaction_details (transaction_id, part_id, quantity) VALUES (?, ?, ?)",
+                    (return_transaction_id, part.part_id, -abs(part.quantity))  # Negative quantity for returns
+                )
+
+            # Update the total refund in the return transaction
+            self.cursor.execute(
+                "UPDATE transactions SET total_price = ? WHERE transaction_id = ?",
+                (-total_refund, return_transaction_id)  # Negative total price for returns
+            )
+
+            # Update the store's balance
+            self.cursor.execute(
+                "UPDATE stores SET balance = balance - ? WHERE store_id = ?",
+                (total_refund, store_id)
+            )
+
+            self.conn.commit()
+            print(f"Return transaction {return_transaction_id} completed successfully. Total refund: {total_refund}.")
+            return return_transaction_id
+
+        except sqlite3.Error as e:
+            print(f"Error processing return for transaction ID {transaction_id}: {e}")
+            self.conn.rollback()
+            return None
+
     def reset_db(self):
         """Reset the database by dropping all tables."""
         try:
