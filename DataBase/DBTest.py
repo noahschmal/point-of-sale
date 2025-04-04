@@ -294,5 +294,53 @@ class TestDatabase(unittest.TestCase):
 
         print("test_return_from_transaction passed successfully.")
 
+    def test_store_tax_rate(self):
+        """Test tax rate calculations for store transactions."""
+        # Step 1: Add a store with 8% tax rate
+        self.db.add_store('Test Store', 500.0, tax_rate=0.08)
+        store_id = self.db.get_stores()[0][0]
+        self.db.add_employee('Test', 'Employee', 'Clerk', store_id, 'password')
+
+        # Step 2: Add parts to the store
+        part1_id = self.db.add_part_to_store('Widget', 20.0, store_id, 10)
+        part2_id = self.db.add_part_to_store('Gadget', 15.0, store_id, 8)
+
+        # Step 3: Create a purchase transaction
+        parts_to_purchase = [
+            PartSold(name='Widget', quantity=3, unit_price=20.0, total_price=60.0),
+            PartSold(name='Gadget', quantity=2, unit_price=15.0, total_price=30.0)
+        ]
+        transaction_id = self.db.create_purchase(parts_to_purchase, store_id)
+
+        # Step 4: Verify purchase transaction with tax
+        purchase_details = self.db.get_transaction_details(transaction_id)
+        subtotal = 90.0  # (3 * 20.0) + (2 * 15.0)
+        expected_tax = subtotal * 0.08
+        expected_total = subtotal + expected_tax
+        self.assertEqual(purchase_details.total_price, expected_total)
+
+        # Step 5: Verify store balance after purchase with tax
+        stores = self.db.get_stores()
+        self.assertEqual(stores[0][2], 500.0 + expected_total)
+
+        # Step 6: Process return by transaction ID
+        return_transaction_id = self.db.return_by_transaction_id(transaction_id)
+
+        # Step 7: Verify return transaction with tax
+        return_details = self.db.get_transaction_details(return_transaction_id)
+        expected_return_total = -expected_total  # Negative total for returns
+        self.assertEqual(return_details.total_price, expected_return_total)
+
+        # Step 8: Verify store balance after return with tax
+        stores = self.db.get_stores()
+        self.assertEqual(stores[0][2], 500.0)  # Back to initial balance
+
+        # Step 9: Verify part quantities after complete cycle
+        parts = self.db.get_parts_by_store(store_id)
+        self.assertEqual(parts[0].quantity, 10)  # Widget: Original quantity restored
+        self.assertEqual(parts[1].quantity, 8)   # Gadget: Original quantity restored
+
+        print("test_store_tax_rate passed successfully.")
+
 if __name__ == '__main__':
     unittest.main()

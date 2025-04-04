@@ -11,6 +11,10 @@ class PartSold:
     unit_price: float
     total_price: float
 
+    def __post_init__(self):
+        """Format monetary values after initialization."""
+        self.unit_price = round(self.unit_price, 2)
+        self.total_price = round(self.total_price, 2)
 
 @dataclass
 class TransactionDetails:
@@ -21,6 +25,9 @@ class TransactionDetails:
     store: str
     parts_sold: List[PartSold]
 
+    def __post_init__(self):
+        """Format monetary values after initialization."""
+        self.total_price = round(self.total_price, 2)
 
 @dataclass
 class Part:
@@ -73,7 +80,7 @@ class Database:
         CREATE TABLE IF NOT EXISTS parts (
             pno INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,  -- Enforce unique part names
-            price REAL NOT NULL,
+            price DECIMAL(10,2) NOT NULL,
             store_id INTEGER,
             quantity INTEGER NOT NULL,
             FOREIGN KEY (store_id) REFERENCES stores(store_id) ON DELETE SET NULL
@@ -85,7 +92,8 @@ class Database:
         CREATE TABLE IF NOT EXISTS stores (
             store_id INTEGER PRIMARY KEY AUTOINCREMENT,
             store_name TEXT NOT NULL,
-            balance REAL NOT NULL DEFAULT 0.0
+            balance DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            tax_rate DECIMAL(5,2) NOT NULL DEFAULT 0.00
         );
         """
     
@@ -95,7 +103,7 @@ class Database:
             transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
             employee_id INTEGER NOT NULL,
             store_id INTEGER NOT NULL,
-            total_price REAL NOT NULL,
+            total_price DECIMAL(10,2) NOT NULL,
             transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE SET NULL,
             FOREIGN KEY (store_id) REFERENCES stores(store_id) ON DELETE CASCADE
@@ -149,14 +157,27 @@ class Database:
             self.conn.close()
             print(f"Connection to {self.db_name} closed.")
 
+    def format_decimal(self, value: float) -> float:
+        """Format a value to 2 decimal places."""
+        return round(value, 2)
 
     # Add a new store
-    def add_store(self, store_name, balance=0.0):
+    def add_store(self, store_name, balance=0.0, tax_rate=0.0):
+        """
+        Add a new store with balance and tax rate.
+        
+        Args:
+            store_name (str): Name of the store
+            balance (float): Initial balance, defaults to 0.0
+            tax_rate (float): Tax rate as decimal (e.g., 0.08 for 8%), defaults to 0.0
+        """
         try:
-            query = "INSERT INTO stores (store_name, balance) VALUES (?, ?)"
-            self.cursor.execute(query, (store_name, balance))
+            formatted_balance = self.format_decimal(balance)
+            formatted_tax_rate = self.format_decimal(tax_rate)
+            query = "INSERT INTO stores (store_name, balance, tax_rate) VALUES (?, ?, ?)"
+            self.cursor.execute(query, (store_name, formatted_balance, formatted_tax_rate))
             self.conn.commit()
-            print(f"Store '{store_name}' added successfully.")
+            print(f"Store '{store_name}' added successfully with {formatted_tax_rate*100:.2f}% tax rate.")
         except sqlite3.Error as e:
             print(f"Error adding store: {e}")
 
@@ -189,13 +210,14 @@ class Database:
             int: The generated part number (pno) if successful, None otherwise.
         """
         try:
+            formatted_price = self.format_decimal(price)
             self.cursor.execute("SELECT store_id FROM stores WHERE store_id = ?", (store_id,))
             if not self.cursor.fetchone():
                 print(f"Error: Store ID {store_id} does not exist.")
                 return None
 
             query = "INSERT INTO parts (name, price, store_id, quantity) VALUES (?, ?, ?, ?)"
-            self.cursor.execute(query, (name, price, store_id, quantity))
+            self.cursor.execute(query, (name, formatted_price, store_id, quantity))
             self.conn.commit()
 
             # Return the generated pno (part number)
@@ -447,27 +469,18 @@ class Database:
             return None
 
     def create_purchase(self, parts: List[PartSold], store_id: int) -> int:
-        """
-        Create a purchase transaction for multiple parts.
-
-        Args:
-            parts (List[PartSold]): A list of `PartSold` objects, where each object contains:
-                                    - name: Part name (str)
-                                    - quantity: Quantity to purchase (int)
-                                    - unit_price: Unit price of the part (float)
-            store_id (int): The ID of the store where the purchase is made.
-
-        Returns:
-            int: The transaction ID of the created purchase.
-        """
         try:
+            # Get store's tax rate
+            self.cursor.execute("SELECT tax_rate FROM stores WHERE store_id = ?", (store_id,))
+            tax_rate = self.cursor.fetchone()[0]
+            
             total_price = 0.0
             transaction_id = None
 
             # Create a transaction
             self.cursor.execute(
                 "INSERT INTO transactions (employee_id, store_id, total_price) VALUES (?, ?, ?)",
-                (1, store_id, 0.0)  # Replace `1` with the actual employee ID
+                (1, store_id, 0.0)
             )
             transaction_id = self.cursor.lastrowid
 
@@ -500,20 +513,21 @@ class Database:
                 else:
                     print(f"Part '{part.name}' not found in store {store_id}.")
 
+            # Calculate tax
+            tax_amount = self.format_decimal(total_price * tax_rate)
+            total_with_tax = self.format_decimal(total_price + tax_amount)
+
             # Update the total price of the transaction
             self.cursor.execute(
                 "UPDATE transactions SET total_price = ? WHERE transaction_id = ?",
-                (total_price, transaction_id)
+                (total_with_tax, transaction_id)
             )
 
             # Update the store's balance
-            self.cursor.execute(
-                "UPDATE stores SET balance = balance + ? WHERE store_id = ?",
-                (total_price, store_id)
-            )
+            self.update_store_balance(store_id, total_with_tax, is_addition=True)
 
             self.conn.commit()
-            print(f"Purchase transaction {transaction_id} completed. Total price: {total_price}.")
+            print(f"Purchase transaction {transaction_id} completed. Subtotal: {total_price:.2f}, Tax: {tax_amount:.2f}, Total: {total_with_tax:.2f}")
             return transaction_id
 
         except sqlite3.Error as e:
@@ -610,15 +624,20 @@ class Database:
             int: The transaction ID of the created return transaction.
         """
         try:
+            # Get store's tax rate
+            store_id = self.cursor.execute(
+                "SELECT store_id FROM transactions WHERE transaction_id = ?", 
+                (transaction_id,)
+            ).fetchone()[0]
+            
+            self.cursor.execute("SELECT tax_rate FROM stores WHERE store_id = ?", (store_id,))
+            tax_rate = self.cursor.fetchone()[0]
+
             # Fetch the original transaction details
             transaction_details = self.get_transaction_details(transaction_id)
 
             if not transaction_details:
                 raise Exception(f"Transaction with ID {transaction_id} not found.")
-
-            store_id = self.cursor.execute(
-                "SELECT store_id FROM transactions WHERE transaction_id = ?", (transaction_id,)
-            ).fetchone()[0]
 
             total_refund = 0.0
 
@@ -654,20 +673,21 @@ class Database:
                     (return_transaction_id, part.part_id, -abs(part.quantity))  # Negative quantity for returns
                 )
 
+            # Calculate tax
+            tax_amount = total_refund * tax_rate
+            total_with_tax = self.format_decimal(total_refund + tax_amount)
+
             # Update the total refund in the return transaction
             self.cursor.execute(
                 "UPDATE transactions SET total_price = ? WHERE transaction_id = ?",
-                (-total_refund, return_transaction_id)  # Negative total price for returns
+                (-total_with_tax, return_transaction_id)
             )
 
             # Update the store's balance
-            self.cursor.execute(
-                "UPDATE stores SET balance = balance - ? WHERE store_id = ?",
-                (total_refund, store_id)
-            )
+            self.update_store_balance(store_id, total_with_tax, is_addition=False)
 
             self.conn.commit()
-            print(f"Return transaction {return_transaction_id} completed successfully. Total refund: {total_refund}.")
+            print(f"Return transaction {return_transaction_id} completed. Subtotal: {total_refund}, Tax: {tax_amount}, Total: {total_with_tax}")
             return return_transaction_id
 
         except sqlite3.Error as e:
@@ -898,3 +918,39 @@ class Database:
         except sqlite3.Error as e:
             print(f"Database error: {e}")
             raise Exception(f"Error fetching part '{name}' from store {store_id}")
+
+    def update_store_balance(self, store_id: int, amount: float, is_addition: bool = True) -> bool:
+        """
+        Update store balance with proper decimal formatting.
+        
+        Args:
+            store_id (int): The ID of the store to update
+            amount (float): The amount to add or subtract
+            is_addition (bool): True to add amount, False to subtract
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            formatted_amount = self.format_decimal(amount)
+            
+            # Get current balance
+            self.cursor.execute("SELECT balance FROM stores WHERE store_id = ?", (store_id,))
+            current_balance = self.cursor.fetchone()[0]
+            
+            # Calculate new balance
+            new_balance = self.format_decimal(
+                current_balance + formatted_amount if is_addition 
+                else current_balance - formatted_amount
+            )
+            
+            # Update store balance
+            self.cursor.execute(
+                "UPDATE stores SET balance = ? WHERE store_id = ?",
+                (new_balance, store_id)
+            )
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Error updating store balance: {e}")
+            return False
