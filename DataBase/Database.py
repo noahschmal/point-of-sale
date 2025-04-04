@@ -469,7 +469,7 @@ class Database:
             return None
 
 
-    def create_purchase(self, parts: List[PartSold], store_id: int, employee_id: int) -> int:
+    def create_purchase(self, parts: List[PartSold], store_id: int, employee_id: int = 1) -> int:
         """
         Create a purchase transaction for multiple parts.
 
