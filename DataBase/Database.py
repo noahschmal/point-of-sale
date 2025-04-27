@@ -31,6 +31,8 @@ class TransactionDetails:
     subtotal: float = 0.0
     discount_amount: float = 0.0
     tax_amount: float = 0.0
+    discount_id: int = None
+    discount_name: str = None
 
     def __post_init__(self):
         """Format monetary values after initialization."""
@@ -107,7 +109,7 @@ class Database:
         );
         """
     
-        # Create transactions table
+        # Create transactions table (ensure discount_id column exists)
         create_transactions_table_query = """
         CREATE TABLE IF NOT EXISTS transactions (
             transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,8 +117,10 @@ class Database:
             store_id INTEGER NOT NULL,
             total_price DECIMAL(10,2) NOT NULL,
             transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            discount_id INTEGER,
             FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE SET NULL,
-            FOREIGN KEY (store_id) REFERENCES stores(store_id) ON DELETE CASCADE
+            FOREIGN KEY (store_id) REFERENCES stores(store_id) ON DELETE CASCADE,
+            FOREIGN KEY (discount_id) REFERENCES discounts(discount_id) ON DELETE SET NULL
         );
         """
     
@@ -203,8 +207,22 @@ class Database:
             self.cursor.execute(create_part_discounts_table_query)
             self.conn.commit()
             print("Tables are ready.")
+            # --- Ensure discount_id column exists in transactions table ---
+            self.ensure_discount_id_column()
         except sqlite3.Error as e:
             print(f"Error creating tables: {e}")
+
+    def ensure_discount_id_column(self):
+        """Ensure the discount_id column exists in the transactions table (for upgrades)."""
+        self.cursor.execute("PRAGMA table_info(transactions)")
+        columns = [col[1] for col in self.cursor.fetchall()]
+        if "discount_id" not in columns:
+            try:
+                self.cursor.execute("ALTER TABLE transactions ADD COLUMN discount_id INTEGER;")
+                self.conn.commit()
+                print("Added discount_id column to transactions table.")
+            except Exception as e:
+                print(f"Error adding discount_id column: {e}")
 
     # Closes the connection to the database
     def close_connection(self):
@@ -531,53 +549,52 @@ class Database:
             return None
 
 
-    def create_purchase(self, parts: List[PartSold], store_id: int, employee_id: int = 1) -> int:
+    def create_purchase(self, parts: List[PartSold], store_id: int, employee_id: int = 1, discount_id: int = None) -> int:
         """Create a purchase transaction for multiple parts with discount support."""
         try:
             tax_rate = self.get_store_tax_rate(store_id)
             subtotal = 0.0
             discounted_total = 0.0
             transaction_id = None
+            discount_amount = 0.0
 
-            # Create initial transaction
+            # Calculate subtotal and discount
+            for part in parts:
+                part_subtotal = part.unit_price * part.quantity
+                subtotal += part_subtotal
+            if discount_id:
+                # Get discount info
+                self.cursor.execute("SELECT discount_type, value FROM discounts WHERE discount_id = ?", (discount_id,))
+                row = self.cursor.fetchone()
+                if row:
+                    dtype, dval = row
+                    if dtype == "percentage":
+                        discount_amount = round(subtotal * (float(dval) / 100), 2)
+                    elif dtype == "fixed":
+                        discount_amount = min(round(float(dval), 2), subtotal)
+            discounted_total = max(subtotal - discount_amount, 0)
+
+            # Create initial transaction (store discount_id)
             self.cursor.execute(
-                "INSERT INTO transactions (employee_id, store_id, total_price) VALUES (?, ?, ?)",
-                (employee_id, store_id, 0.0)
+                "INSERT INTO transactions (employee_id, store_id, total_price, discount_id) VALUES (?, ?, ?, ?)",
+                (employee_id, store_id, 0.0, discount_id)
             )
             transaction_id = self.cursor.lastrowid
 
             # Process each part
             for part in parts:
-                # Fetch part info
                 self.cursor.execute(
                     "SELECT pno, quantity FROM parts WHERE name = ? AND store_id = ?", 
                     (part.name, store_id)
                 )
                 result = self.cursor.fetchone()
-
                 if result and result[1] >= part.quantity:
                     pno, current_quantity = result
                     new_quantity = current_quantity - part.quantity
-                    
-                    # Calculate prices
-                    part_subtotal = part.unit_price * part.quantity
-                    subtotal += part_subtotal
-                    
-                    # Apply discount if present
-                    if part.discount_percent > 0:
-                        discounted_price = part_subtotal * (1 - part.discount_percent)
-                    else:
-                        discounted_price = part_subtotal
-                    
-                    discounted_total += discounted_price
-
-                    # Update inventory
                     self.cursor.execute(
                         "UPDATE parts SET quantity = ? WHERE pno = ?",
                         (new_quantity, pno)
                     )
-                    
-                    # Add transaction detail
                     self.cursor.execute(
                         "INSERT INTO transaction_details (transaction_id, part_id, quantity) VALUES (?, ?, ?)",
                         (transaction_id, pno, part.quantity)
@@ -796,11 +813,11 @@ class Database:
 
     def get_transaction_details(self, transaction_id) -> TransactionDetails:
         """Fetches and returns all details of a specific transaction as a structured object."""
-        # Fetch transaction details
+        # Fetch transaction details (include discount_id)
         transaction_query = """
         SELECT t.transaction_id, t.transaction_date, t.total_price, 
                e.first_name || ' ' || e.last_name AS employee_name, 
-               s.store_name
+               s.store_name, t.discount_id
         FROM transactions t
         JOIN employees e ON t.employee_id = e.id
         JOIN stores s ON t.store_id = s.store_id
@@ -808,10 +825,8 @@ class Database:
         """
         self.cursor.execute(transaction_query, (transaction_id,))
         transaction = self.cursor.fetchone()
-    
         if not transaction:
             raise Exception("No trasaction found")
-    
         # Fetch all parts involved in the transaction
         parts_query = """
         SELECT p.name, td.quantity, p.price, (td.quantity * p.price) AS total_part_price
@@ -821,10 +836,23 @@ class Database:
         """
         self.cursor.execute(parts_query, (transaction_id,))
         parts = self.cursor.fetchall()
-    
         # Create a list of PartSold objects
         parts_sold = [PartSold(name=p[0], quantity=p[1], unit_price=p[2], total_price=p[3]) for p in parts]
-    
+        # Fetch discount info if present
+        discount_id = transaction[5]
+        discount_name = None
+        discount_amount = 0.0
+        subtotal = sum(p.total_price for p in parts_sold)
+        if discount_id:
+            self.cursor.execute("SELECT name, discount_type, value FROM discounts WHERE discount_id = ?", (discount_id,))
+            drow = self.cursor.fetchone()
+            if drow:
+                discount_name = drow[0]
+                dtype, dval = drow[1], float(drow[2])
+                if dtype == "percentage":
+                    discount_amount = round(subtotal * (dval / 100), 2)
+                elif dtype == "fixed":
+                    discount_amount = min(round(dval, 2), subtotal)
         # Return the structured TransactionDetails object
         return TransactionDetails(
             transaction_id=transaction[0],
@@ -832,27 +860,11 @@ class Database:
             total_price=transaction[2],
             employee=transaction[3],
             store=transaction[4],
-            parts_sold=parts_sold
-        )
-        
-    def get_part_struct(self, part_id: int) -> Part:
-        """Fetches and returns part details as a structured object."""
-        query = """
-        SELECT pno, name, price, store_id, quantity
-        FROM parts
-        WHERE pno = ?;
-        """
-        self.cursor.execute(query, (part_id,))
-        part = self.cursor.fetchone()
-        if not part:
-            raise Exception("Part not found")
-        # Return a structured Part object
-        return Part(
-            part_id=part[0],
-            name=part[1],
-            price=part[2],
-            store_id=part[3],
-            quantity=part[4]
+            parts_sold=parts_sold,
+            subtotal=subtotal,
+            discount_amount=discount_amount,
+            discount_id=discount_id,
+            discount_name=discount_name
         )
 
     def SalesReport(self, store_id: int):
@@ -860,10 +872,11 @@ class Database:
         Fetches and returns all transaction details for a specific store.
         """
         try:
-            # Query to fetch transactions for the given store
+            # Query to fetch transactions for the given store (include discount_id)
             transactions_query = """
             SELECT t.transaction_id, t.transaction_date, t.total_price, 
-                   e.first_name || ' ' || e.last_name AS employee_name
+                   e.first_name || ' ' || e.last_name AS employee_name,
+                   t.discount_id
             FROM transactions t
             JOIN employees e ON t.employee_id = e.id
             WHERE t.store_id = ?
@@ -871,16 +884,13 @@ class Database:
             """
             self.cursor.execute(transactions_query, (store_id,))
             transactions = self.cursor.fetchall()
-    
             if not transactions:
                 print(f"No transactions found for store ID {store_id}.")
                 return []
-    
             # Fetch details for each transaction
             sales_report = []
             for transaction in transactions:
-                transaction_id, transaction_date, total_price, employee_name = transaction
-    
+                transaction_id, transaction_date, total_price, employee_name, discount_id = transaction
                 # Fetch parts sold in this transaction
                 parts_query = """
                 SELECT p.name, td.quantity, p.price, (td.quantity * p.price) AS total_part_price
@@ -890,10 +900,22 @@ class Database:
                 """
                 self.cursor.execute(parts_query, (transaction_id,))
                 parts = self.cursor.fetchall()
-    
                 # Create a list of PartSold objects
                 parts_sold = [PartSold(name=p[0], quantity=p[1], unit_price=p[2], total_price=p[3]) for p in parts]
-    
+                # Fetch discount info if present
+                discount_name = None
+                discount_amount = 0.0
+                subtotal = sum(p.total_price for p in parts_sold)
+                if discount_id:
+                    self.cursor.execute("SELECT name, discount_type, value FROM discounts WHERE discount_id = ?", (discount_id,))
+                    drow = self.cursor.fetchone()
+                    if drow:
+                        discount_name = drow[0]
+                        dtype, dval = drow[1], float(drow[2])
+                        if dtype == "percentage":
+                            discount_amount = round(subtotal * (dval / 100), 2)
+                        elif dtype == "fixed":
+                            discount_amount = min(round(dval, 2), subtotal)
                 # Add transaction details to the report
                 sales_report.append(TransactionDetails(
                     transaction_id=transaction_id,
@@ -901,11 +923,15 @@ class Database:
                     total_price=total_price,
                     employee=employee_name,
                     store=f"Store ID {store_id}",
-                    parts_sold=parts_sold
+                    parts_sold=parts_sold,
+                    subtotal=subtotal,
+                    discount_amount=discount_amount,
+                    discount_id=discount_id,
+                    discount_name=discount_name
                 ))
-    
+
             return sales_report
-    
+
         except sqlite3.Error as e:
             print(f"Error fetching sales report for store ID {store_id}: {e}")
             return []
@@ -957,7 +983,6 @@ class Database:
             """
             self.cursor.execute(query, (name, store_id))
             part = self.cursor.fetchone()
-            
             if not part:
                 raise Exception(f"Part '{name}' not found in store {store_id}")
                 
@@ -972,6 +997,25 @@ class Database:
         except sqlite3.Error as e:
             print(f"Database error: {e}")
             raise Exception(f"Error fetching part '{name}' from store {store_id}")
+
+    def get_part_by_id(self, part_id: int):
+        """Fetches and returns part details as a structured object."""
+        query = """
+        SELECT pno, name, price, store_id, quantity
+        FROM parts
+        WHERE pno = ?;
+        """
+        self.cursor.execute(query, (part_id,))
+        part = self.cursor.fetchone()
+        if not part:
+            return None
+        return Part(
+            part_id=part[0],
+            name=part[1],
+            price=part[2],
+            store_id=part[3],
+            quantity=part[4]
+        )
 
     def update_store_balance(self, store_id: int, amount: float, is_addition: bool = True) -> bool:
         """
