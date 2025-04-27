@@ -448,19 +448,6 @@ class Database:
                 new_quantity = current_quantity + quantity
                 total_refund = part_price * quantity
                 
-                # Create a transaction
-                self.cursor.execute(
-                    "INSERT INTO transactions (employee_id, store_id, total_price) VALUES (?, ?, ?)",
-                    (1, store_id, -total_refund)  # Replace `1` with the actual employee ID
-                )
-                transaction_id = self.cursor.lastrowid
-
-                # Add transaction details
-                self.cursor.execute(
-                    "INSERT INTO transaction_details (transaction_id, part_id, quantity) VALUES (?, ?, ?)",
-                    (transaction_id, pno, -quantity)  # Negative quantity for returns
-                )
-
                 # Update the quantity of the part in the store
                 self.cursor.execute("UPDATE parts SET quantity = ? WHERE pno = ? AND store_id = ?", (new_quantity, pno, store_id))
                 
@@ -687,66 +674,68 @@ class Database:
         if not self.check_admin_access(employee_id):
             raise Exception("Admin access required for returns")
         try:
-            # Get original transaction details
+            # Get original transaction details with discount info
+            transaction_details = self.get_transaction_details(transaction_id)
+            if not transaction_details:
+                raise Exception(f"Transaction with ID {transaction_id} not found.")
+
             store_id = self.cursor.execute(
                 "SELECT store_id FROM transactions WHERE transaction_id = ?", 
                 (transaction_id,)
             ).fetchone()[0]
-            
+
+            # Get store's tax rate
             self.cursor.execute("SELECT tax_rate FROM stores WHERE store_id = ?", (store_id,))
             tax_rate = self.cursor.fetchone()[0]
 
-            # Fetch the original transaction details
-            transaction_details = self.get_transaction_details(transaction_id)
-
-            if not transaction_details:
-                raise Exception(f"Transaction with ID {transaction_id} not found.")
-
-            total_refund = 0.0
-
             # Create a new return transaction
             self.cursor.execute(
-                "INSERT INTO transactions (employee_id, store_id, total_price) VALUES (?, ?, ?)",
-                (employee_id, store_id, 0.0)  # Replace `1` with the actual employee ID
+                "INSERT INTO transactions (employee_id, store_id, total_price, discount_id) VALUES (?, ?, ?, ?)",
+                (employee_id, store_id, 0.0, transaction_details.discount_id)  # Include discount_id from original
             )
             return_transaction_id = self.cursor.lastrowid
 
+            total_refund = 0.0
+
             # Process each part in the original transaction
             for part in transaction_details.parts_sold:
-                # Fetch the current quantity of the part
+                # Update inventory quantity
                 self.cursor.execute(
                     "SELECT quantity FROM parts WHERE name = ? AND store_id = ?", (part.name, store_id)
                 )
                 current_quantity = self.cursor.fetchone()[0]
-
-                # Update the quantity of the part in the store
-                new_quantity = current_quantity + abs(part.quantity)  # Add the returned quantity
+                new_quantity = current_quantity + abs(part.quantity)
                 self.cursor.execute(
                     "UPDATE parts SET quantity = ? WHERE name = ? AND store_id = ?",
                     (new_quantity, part.name, store_id)
                 )
 
-                # Calculate the refund for this part
+                # Calculate refund with discount consideration
                 part_refund = abs(part.quantity) * part.unit_price
                 total_refund += part_refund
-                part.part_id = self.get_part_by_name(part.name, store_id).part_id  # Get the part ID
-                # Add transaction details for the return
+                part.part_id = self.get_part_by_name(part.name, store_id).part_id
+
+                # Add return transaction details
                 self.cursor.execute(
                     "INSERT INTO transaction_details (transaction_id, part_id, quantity) VALUES (?, ?, ?)",
-                    (return_transaction_id, part.part_id, -abs(part.quantity))  # Negative quantity for returns
+                    (return_transaction_id, part.part_id, -abs(part.quantity))
                 )
 
-            # Calculate tax
+            # Apply the same discount as original transaction
+            if transaction_details.discount_amount > 0:
+                total_refund = max(total_refund - transaction_details.discount_amount, 0)
+
+            # Calculate tax on discounted amount
             tax_amount = total_refund * tax_rate
             total_with_tax = self.format_decimal(total_refund + tax_amount)
 
-            # Update the total refund in the return transaction
+            # Update return transaction total
             self.cursor.execute(
                 "UPDATE transactions SET total_price = ? WHERE transaction_id = ?",
                 (-total_with_tax, return_transaction_id)
             )
 
-            # Log the return in returns table
+            # Log the return
             self.cursor.execute(
                 """INSERT INTO returns 
                    (transaction_id, original_transaction_id, total_refund, store_id, employee_id)
@@ -754,15 +743,15 @@ class Database:
                 (return_transaction_id, transaction_id, total_with_tax, store_id, employee_id)
             )
 
-            # Update the store's balance
+            # Update store balance
             self.update_store_balance(store_id, total_with_tax, is_addition=False)
 
             self.conn.commit()
-            print(f"Return transaction {return_transaction_id} completed. Subtotal: {total_refund}, Tax: {tax_amount}, Total: {total_with_tax}")
+            print(f"Return processed - Original total: {transaction_details.total_price}, Refund amount: {total_with_tax}")
             return return_transaction_id
 
-        except sqlite3.Error as e:
-            print(f"Error processing return for transaction ID {transaction_id}: {e}")
+        except Exception as e:
+            print(f"Error processing return: {e}")
             self.conn.rollback()
             return None
 
