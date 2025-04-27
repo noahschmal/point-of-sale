@@ -211,17 +211,19 @@ class TestDatabase(unittest.TestCase):
 
     def test_return_part(self):
         """Test returning parts and updating store balance."""
-        # Step 1: Add a store
+        # Step 1: Add a store and admin employee
         self.db.add_store('Test Store', 500.0)
         store_id = self.db.get_stores()[0][0]
+        self.db.add_employee('Test', 'Admin', 'Admin', store_id, 'password')
+        admin_id = self.db.get_employees()[0][0]
 
         # Step 2: Add parts to the store
         self.db.add_part_to_store('Widget', 20.0, store_id, 5)
         self.db.add_part_to_store('Gadget', 15.0, store_id, 5)
 
         # Step 3: Return parts
-        self.db.return_part('Widget', store_id, 2)  # Return 2 units of Widget
-        self.db.return_part('Gadget', store_id, 1)  # Return 1 unit of Gadget
+        self.db.return_part('Widget', store_id, 2, admin_id)  # Return 2 units of Widget
+        self.db.return_part('Gadget', store_id, 1, admin_id)  # Return 1 unit of Gadget
 
         # Step 4: Verify updated quantities in the `parts` table
         parts = self.db.get_parts_by_store(store_id)  # Use get_parts_by_store
@@ -240,10 +242,11 @@ class TestDatabase(unittest.TestCase):
 
     def test_return_from_transaction(self):
         """Test returning items from a specific transaction."""
-        # Step 1: Add a store and employee
+        # Step 1: Add a store and employees
         self.db.add_store('Test Store', 500.0)
         store_id = self.db.get_stores()[0][0]
-        self.db.add_employee('Test', 'Employee', 'Clerk', store_id, 'password')
+        self.db.add_employee('Test', 'Admin', 'Admin', store_id, 'password')
+        admin_id = self.db.get_employees()[0][0]
 
         # Step 2: Add parts to the store
         part1_id = self.db.add_part_to_store('Widget', 20.0, store_id, 10)
@@ -264,7 +267,7 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(stores[0][2], 590.0)  # Initial 500 + Purchase (60 + 30)
 
         # Step 5: Process return by transaction ID
-        return_transaction_id = self.db.return_by_transaction_id(transaction_id)
+        return_transaction_id = self.db.return_by_transaction_id(transaction_id, admin_id)
         self.assertIsNotNone(return_transaction_id)
 
         # Step 6: Verify final state after return
@@ -296,10 +299,11 @@ class TestDatabase(unittest.TestCase):
 
     def test_store_tax_rate(self):
         """Test tax rate calculations for store transactions."""
-        # Step 1: Add a store with 8% tax rate
+        # Step 1: Add a store with 8% tax rate and admin employee
         self.db.add_store('Test Store', 500.0, tax_rate=0.08)
         store_id = self.db.get_stores()[0][0]
-        self.db.add_employee('Test', 'Employee', 'Clerk', store_id, 'password')
+        self.db.add_employee('Test', 'Admin', 'Admin', store_id, 'password')
+        admin_id = self.db.get_employees()[0][0]
 
         # Step 2: Add parts to the store
         part1_id = self.db.add_part_to_store('Widget', 20.0, store_id, 10)
@@ -324,7 +328,7 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(stores[0][2], 500.0 + expected_total)
 
         # Step 6: Process return by transaction ID
-        return_transaction_id = self.db.return_by_transaction_id(transaction_id)
+        return_transaction_id = self.db.return_by_transaction_id(transaction_id, admin_id)
 
         # Step 7: Verify return transaction with tax
         return_details = self.db.get_transaction_details(return_transaction_id)
@@ -341,6 +345,147 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(parts[1].quantity, 8)   # Gadget: Original quantity restored
 
         print("test_store_tax_rate passed successfully.")
+
+    def test_transaction_with_discount(self):
+        """Test applying discounts to transactions."""
+        # Setup store and employee
+        self.db.add_store('Test Store', 500.0, tax_rate=0.08)  # 8% tax rate
+        store_id = self.db.get_stores()[0][0]
+        self.db.add_employee('Test', 'Admin', 'Admin', store_id, 'password')
+        admin_id = self.db.get_employees()[0][0]
+
+        # Add parts to store
+        self.db.add_part_to_store('Widget', 100.0, store_id, 10)  # $100 item
+        self.db.add_part_to_store('Gadget', 50.0, store_id, 8)    # $50 item
+
+        # Create purchase with 20% discount
+        widget_price = 100.0 * 0.8  # Widget price after 20% discount
+        gadget_price = 50.0 * 0.8   # Gadget price after 20% discount
+        
+        parts_to_purchase = [
+            PartSold(name='Widget', quantity=1, unit_price=100.0, total_price=widget_price, discount_percent=0.20),
+            PartSold(name='Gadget', quantity=2, unit_price=50.0, total_price=gadget_price * 2, discount_percent=0.20)
+        ]
+        transaction_id = self.db.create_purchase(parts_to_purchase, store_id, admin_id)
+
+        # Verify transaction details
+        transaction_details = self.db.get_transaction_details(transaction_id)
+        
+        # Calculate expected values
+        subtotal = widget_price + (gadget_price * 2)  # Total after discounts
+        tax_amount = subtotal * 0.08                  # Tax on discounted amount
+        expected_total = subtotal + tax_amount        # Final total
+        
+        # Verify calculations
+        self.assertEqual(transaction_details.total_price, expected_total)
+
+        # Verify store balance
+        stores = self.db.get_stores()
+        self.assertEqual(stores[0][2], 500.0 + expected_total)
+
+        # Verify inventory was updated
+        parts = self.db.get_parts_by_store(store_id)
+        self.assertEqual(parts[0].quantity, 9)   # Widget: 10 - 1
+        self.assertEqual(parts[1].quantity, 6)   # Gadget: 8 - 2
+
+    def test_return_logging(self):
+        """Test that returns are properly logged in the returns table."""
+        # Setup store and admin employee
+        self.db.add_store('Test Store', 500.0, 0.08)  # 8% tax rate
+        store_id = self.db.get_stores()[0][0]
+        self.db.add_employee('Test', 'Admin', 'Admin', store_id, 'password')  # Changed to Admin
+        admin_id = self.db.get_employees()[0][0]
+
+        # Add parts to store
+        self.db.add_part_to_store('Widget', 20.0, store_id, 10)
+        self.db.add_part_to_store('Gadget', 15.0, store_id, 8)
+
+        # Create initial purchase
+        purchase_parts = [
+            PartSold(name='Widget', quantity=3, unit_price=20.0, total_price=60.0),
+            PartSold(name='Gadget', quantity=2, unit_price=15.0, total_price=30.0)
+        ]
+        transaction_id = self.db.create_purchase(purchase_parts, store_id, admin_id)
+
+        # Process return by transaction ID with admin
+        return_transaction_id = self.db.return_by_transaction_id(transaction_id, admin_id)
+
+        # Get transaction log and verify return was recorded
+        transactions = self.db.get_transaction_log(store_id)
+        
+        # Find the return transaction
+        return_transaction = next(
+            (t for t in transactions if t['transaction_id'] == return_transaction_id), 
+            None
+        )
+
+        # Assert return transaction exists and has correct values
+        self.assertIsNotNone(return_transaction, "Return transaction should exist in log")
+        self.assertEqual(return_transaction['type'], 'Return')
+        self.assertEqual(return_transaction['original_transaction_id'], transaction_id)
+        
+        # Verify refund amount includes tax (negative amount for returns)
+        expected_refund = -(90.0 * 1.08)  # Original total with 8% tax
+        self.assertAlmostEqual(return_transaction['total_price'], expected_refund, places=2)
+
+        print("test_return_logging passed successfully.")
+
+    def test_return_part_admin_only(self):
+        """Test that only admin users can process returns."""
+        # Setup store and employees
+        self.db.add_store('Test Store', 500.0)
+        store_id = self.db.get_stores()[0][0]
+        
+        # Create admin and regular employee
+        self.db.add_employee('Admin', 'User', 'Admin', store_id, 'password')
+        self.db.add_employee('Regular', 'User', 'Clerk', store_id, 'password')
+        admin_id = self.db.get_employees()[0][0]
+        clerk_id = self.db.get_employees()[1][0]
+
+        # Add test part
+        self.db.add_part_to_store('Widget', 20.0, store_id, 5)
+
+        # Test admin can return parts
+        try:
+            self.db.return_part('Widget', store_id, 2, admin_id)
+        except Exception as e:
+            self.fail("Admin should be able to process returns")
+
+        # Test clerk cannot return parts
+        with self.assertRaises(Exception) as context:
+            self.db.return_part('Widget', store_id, 1, clerk_id)
+        self.assertEqual(str(context.exception), "Admin access required for returns")
+
+    def test_return_by_transaction_admin_only(self):
+        """Test that only admin users can process transaction returns."""
+        # Setup store and employees
+        self.db.add_store('Test Store', 500.0)
+        store_id = self.db.get_stores()[0][0]
+        
+        # Create admin and regular employee
+        self.db.add_employee('Admin', 'User', 'Admin', store_id, 'password')
+        self.db.add_employee('Regular', 'User', 'Clerk', store_id, 'password')
+        admin_id = self.db.get_employees()[0][0]
+        clerk_id = self.db.get_employees()[1][0]
+
+        # Add parts and create purchase
+        self.db.add_part_to_store('Widget', 20.0, store_id, 10)
+        parts_to_purchase = [
+            PartSold(name='Widget', quantity=3, unit_price=20.0, total_price=60.0)
+        ]
+        transaction_id = self.db.create_purchase(parts_to_purchase, store_id)
+
+        # Test admin can process return
+        try:
+            return_id = self.db.return_by_transaction_id(transaction_id, admin_id)
+            self.assertIsNotNone(return_id)
+        except Exception as e:
+            self.fail("Admin should be able to process transaction returns")
+
+        # Test clerk cannot process return
+        with self.assertRaises(Exception) as context:
+            self.db.return_by_transaction_id(transaction_id, clerk_id)
+        self.assertEqual(str(context.exception), "Admin access required for returns")
 
 if __name__ == '__main__':
     unittest.main()

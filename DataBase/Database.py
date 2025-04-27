@@ -10,11 +10,15 @@ class PartSold:
     quantity: int
     unit_price: float
     total_price: float
+    discount_percent: float = 0.0
+    discounted_price: float = None
 
     def __post_init__(self):
         """Format monetary values after initialization."""
         self.unit_price = round(self.unit_price, 2)
         self.total_price = round(self.total_price, 2)
+        if self.discount_percent > 0:
+            self.discounted_price = round(self.total_price * (1 - self.discount_percent), 2)
 
 @dataclass
 class TransactionDetails:
@@ -24,10 +28,16 @@ class TransactionDetails:
     employee: str
     store: str
     parts_sold: List[PartSold]
+    subtotal: float = 0.0
+    discount_amount: float = 0.0
+    tax_amount: float = 0.0
 
     def __post_init__(self):
         """Format monetary values after initialization."""
         self.total_price = round(self.total_price, 2)
+        self.subtotal = round(self.subtotal, 2)
+        self.discount_amount = round(self.discount_amount, 2)
+        self.tax_amount = round(self.tax_amount, 2)
 
 @dataclass
 class Part:
@@ -137,6 +147,49 @@ class Database:
             WHERE transaction_id = NEW.transaction_id;
         END;
         """        
+        # Create returns table to track returns separately
+        create_returns_table_query = """
+        CREATE TABLE IF NOT EXISTS returns (
+            return_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_id INTEGER NOT NULL,
+            original_transaction_id INTEGER,
+            return_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            total_refund DECIMAL(10,2) NOT NULL,
+            store_id INTEGER NOT NULL,
+            employee_id INTEGER NOT NULL,
+            FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE CASCADE,
+            FOREIGN KEY (original_transaction_id) REFERENCES transactions(transaction_id) ON DELETE SET NULL,
+            FOREIGN KEY (store_id) REFERENCES stores(store_id) ON DELETE CASCADE,
+            FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE SET NULL
+        );
+        """
+        
+        # Create discounts table
+        create_discounts_table_query = """
+        CREATE TABLE IF NOT EXISTS discounts (
+            discount_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            discount_type TEXT NOT NULL CHECK (discount_type IN ('percentage', 'fixed')),
+            value DECIMAL(10,2) NOT NULL,
+            start_date DATE,
+            end_date DATE,
+            store_id INTEGER,
+            active BOOLEAN DEFAULT 1,
+            FOREIGN KEY (store_id) REFERENCES stores(store_id) ON DELETE CASCADE
+        );
+        """
+        
+        # Create part_discounts table for linking parts to discounts
+        create_part_discounts_table_query = """
+        CREATE TABLE IF NOT EXISTS part_discounts (
+            part_discount_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            part_id INTEGER NOT NULL,
+            discount_id INTEGER NOT NULL,
+            FOREIGN KEY (part_id) REFERENCES parts(pno) ON DELETE CASCADE,
+            FOREIGN KEY (discount_id) REFERENCES discounts(discount_id) ON DELETE CASCADE
+        );
+        """
         try:
             # Execute all table creation queries
             self.cursor.execute(create_stores_table_query)  
@@ -145,6 +198,9 @@ class Database:
             self.cursor.execute(create_transactions_table_query)
             self.cursor.execute(create_transaction_details_table_query)
             self.cursor.execute(create_trigger_update_total_price)
+            self.cursor.execute(create_returns_table_query)  # Add this line
+            self.cursor.execute(create_discounts_table_query)
+            self.cursor.execute(create_part_discounts_table_query)
             self.conn.commit()
             print("Tables are ready.")
         except sqlite3.Error as e:
@@ -286,7 +342,10 @@ class Database:
             print(f"Error purchasing part: {e}")
 
     # Return parts: Increase quantity of part in store and decrease store's balance
-    def return_part(self, name, store_id, quantity):
+    def return_part(self, name, store_id, quantity, employee_id: int):
+        """Return parts with admin check."""
+        if not self.check_admin_access(employee_id):
+            raise Exception("Admin access required for returns")
         try:
             # Check the current quantity of the part in the store by part name
             self.cursor.execute("SELECT pno, quantity, price FROM parts WHERE name = ? AND store_id = ?", (name, store_id))
@@ -355,7 +414,10 @@ class Database:
             print(f"Error purchasing part: {e}")
 
     # Return part by pno: Increase quantity of part in store and decrease store's balance
-    def return_part_by_pno(self, pno, store_id, quantity):
+    def return_part_by_pno(self, pno, store_id, quantity, employee_id: int):
+        """Return part by pno with admin check."""
+        if not self.check_admin_access(employee_id):
+            raise Exception("Admin access required for returns")
         try:
             # Check the current quantity of the part in the store by pno
             self.cursor.execute("SELECT quantity, price FROM parts WHERE pno = ? AND store_id = ?", (pno, store_id))
@@ -470,115 +532,95 @@ class Database:
 
 
     def create_purchase(self, parts: List[PartSold], store_id: int, employee_id: int = 1) -> int:
-        """
-        Create a purchase transaction for multiple parts.
-
-        Args:
-            parts (List[PartSold]): A list of `PartSold` objects, where each object contains:
-                                    - name: Part name (str)
-                                    - quantity: Quantity to purchase (int)
-                                    - unit_price: Unit price of the part (float)
-            store_id (int): The ID of the store where the purchase is made.
-            employee_id (int): The ID of the employee processing the purchase.
-
-        Returns:
-            int: The transaction ID of the created purchase.
-        """
-
+        """Create a purchase transaction for multiple parts with discount support."""
         try:
-            # Get store's tax rate
-            self.cursor.execute("SELECT tax_rate FROM stores WHERE store_id = ?", (store_id,))
-            tax_rate = self.cursor.fetchone()[0]
-            
-            total_price = 0.0
+            tax_rate = self.get_store_tax_rate(store_id)
+            subtotal = 0.0
+            discounted_total = 0.0
             transaction_id = None
 
-            # Create a transaction
+            # Create initial transaction
             self.cursor.execute(
                 "INSERT INTO transactions (employee_id, store_id, total_price) VALUES (?, ?, ?)",
-
                 (employee_id, store_id, 0.0)
             )
             transaction_id = self.cursor.lastrowid
 
+            # Process each part
             for part in parts:
-                # Fetch pno if not provided
-                self.cursor.execute("SELECT pno, quantity FROM parts WHERE name = ? AND store_id = ?", (part.name, store_id))
+                # Fetch part info
+                self.cursor.execute(
+                    "SELECT pno, quantity FROM parts WHERE name = ? AND store_id = ?", 
+                    (part.name, store_id)
+                )
                 result = self.cursor.fetchone()
 
-                if result:
+                if result and result[1] >= part.quantity:
                     pno, current_quantity = result
-
-                    if current_quantity >= part.quantity:
-                        new_quantity = current_quantity - part.quantity
-                        part_total_price = part.unit_price * part.quantity
-                        total_price += part_total_price
-
-                        # Add transaction details
-                        self.cursor.execute(
-                            "INSERT INTO transaction_details (transaction_id, part_id, quantity) VALUES (?, ?, ?)",
-                            (transaction_id, pno, part.quantity)
-                        )
-
-                        # Update the quantity of the part in the store
-                        self.cursor.execute(
-                            "UPDATE parts SET quantity = ? WHERE pno = ? AND store_id = ?",
-                            (new_quantity, pno, store_id)
-                        )
+                    new_quantity = current_quantity - part.quantity
+                    
+                    # Calculate prices
+                    part_subtotal = part.unit_price * part.quantity
+                    subtotal += part_subtotal
+                    
+                    # Apply discount if present
+                    if part.discount_percent > 0:
+                        discounted_price = part_subtotal * (1 - part.discount_percent)
                     else:
-                        print(f"Insufficient quantity for part '{part.name}'. Available: {current_quantity}, Requested: {part.quantity}.")
+                        discounted_price = part_subtotal
+                    
+                    discounted_total += discounted_price
+
+                    # Update inventory
+                    self.cursor.execute(
+                        "UPDATE parts SET quantity = ? WHERE pno = ?",
+                        (new_quantity, pno)
+                    )
+                    
+                    # Add transaction detail
+                    self.cursor.execute(
+                        "INSERT INTO transaction_details (transaction_id, part_id, quantity) VALUES (?, ?, ?)",
+                        (transaction_id, pno, part.quantity)
+                    )
                 else:
-                    print(f"Part '{part.name}' not found in store {store_id}.")
+                    raise Exception(f"Insufficient quantity for {part.name}")
 
-            # Calculate tax
-            tax_amount = self.format_decimal(total_price * tax_rate)
-            total_with_tax = self.format_decimal(total_price + tax_amount)
+            # Calculate final amounts
+            tax_amount = discounted_total * tax_rate
+            final_total = discounted_total + tax_amount
 
-            # Update the total price of the transaction
+            # Update transaction total
             self.cursor.execute(
                 "UPDATE transactions SET total_price = ? WHERE transaction_id = ?",
-                (total_with_tax, transaction_id)
+                (final_total, transaction_id)
             )
 
-            # Update the store's balance
-            self.update_store_balance(store_id, total_with_tax, is_addition=True)
+            # Update store balance
+            self.update_store_balance(store_id, final_total, is_addition=True)
 
             self.conn.commit()
-            print(f"Purchase transaction {transaction_id} completed. Subtotal: {total_price:.2f}, Tax: {tax_amount:.2f}, Total: {total_with_tax:.2f}")
+            print(f"Purchase completed - Subtotal: {subtotal:.2f}, Discounted: {discounted_total:.2f}, Tax: {tax_amount:.2f}, Total: {final_total:.2f}")
             return transaction_id
 
-        except sqlite3.Error as e:
-            print(f"Error creating purchase: {e}")
+        except Exception as e:
+            print(f"Error in create_purchase: {e}")
             self.conn.rollback()
             return None
 
-    def create_return(self, parts: List[PartSold], store_id: int) -> int:
-        """
-        Create a return transaction for multiple parts.
-
-        Args:
-            parts (List[PartSold]): A list of `PartSold` objects, where each object contains:
-                                    - name: Part name (str)
-                                    - quantity: Quantity to return (int)
-                                    - unit_price: Unit price of the part (float)
-                                    - total_price: Total price of the returned part (float)
-            store_id (int): The ID of the store where the return is made.
-
-        Returns:
-            int: The transaction ID of the created return.
-        """
+    def create_return(self, parts: List[PartSold], store_id: int, employee_id: int) -> int:
+        """Create a return transaction with admin check."""
+        if not self.check_admin_access(employee_id):
+            raise Exception("Admin access required for returns")
         try:
             total_refund = 0.0
-            transaction_id = None
-
             # Create a transaction
             self.cursor.execute(
                 "INSERT INTO transactions (employee_id, store_id, total_price) VALUES (?, ?, ?)",
-                (1, store_id, 0.0)  # Replace `1` with the actual employee ID
+                (employee_id, store_id, 0.0)
             )
             transaction_id = self.cursor.lastrowid
-            print(f"Created return transaction with ID: {transaction_id}")
 
+            # Process parts and update quantities
             for part in parts:
                 # Fetch part details by name
                 self.cursor.execute("SELECT pno, quantity, price FROM parts WHERE name = ? AND store_id = ?", (part.name, store_id))
@@ -607,22 +649,15 @@ class Database:
                 else:
                     print(f"Part '{part.name}' not found in store {store_id}.")
 
-            # Update the total refund of the transaction
+            # Log the return in returns table
             self.cursor.execute(
-                "UPDATE transactions SET total_price = ? WHERE transaction_id = ?",
-                (-total_refund, transaction_id)  # Negative total price for returns
+                """INSERT INTO returns 
+                   (transaction_id, original_transaction_id, total_refund, store_id, employee_id)
+                   VALUES (?, NULL, ?, ?, ?)""",
+                (transaction_id, total_refund, store_id, employee_id)
             )
-            print(f"Updated transaction {transaction_id} with total refund: {-total_refund}")
-
-            # Update the store's balance
-            self.cursor.execute(
-                "UPDATE stores SET balance = balance - ? WHERE store_id = ?",
-                (total_refund, store_id)
-            )
-            print(f"Updated store {store_id} balance by deducting refund: {total_refund}")
 
             self.conn.commit()
-            print(f"Return transaction {transaction_id} completed successfully.")
             return transaction_id
 
         except sqlite3.Error as e:
@@ -630,18 +665,12 @@ class Database:
             self.conn.rollback()
             return None
 
-    def return_by_transaction_id(self, transaction_id: int) -> int:
-        """
-        Process a return based on a transaction ID.
-
-        Args:
-            transaction_id (int): The ID of the transaction to be returned.
-
-        Returns:
-            int: The transaction ID of the created return transaction.
-        """
+    def return_by_transaction_id(self, transaction_id: int, employee_id: int) -> int:
+        """Process a return based on transaction ID with admin check."""
+        if not self.check_admin_access(employee_id):
+            raise Exception("Admin access required for returns")
         try:
-            # Get store's tax rate
+            # Get original transaction details
             store_id = self.cursor.execute(
                 "SELECT store_id FROM transactions WHERE transaction_id = ?", 
                 (transaction_id,)
@@ -661,7 +690,7 @@ class Database:
             # Create a new return transaction
             self.cursor.execute(
                 "INSERT INTO transactions (employee_id, store_id, total_price) VALUES (?, ?, ?)",
-                (1, store_id, 0.0)  # Replace `1` with the actual employee ID
+                (employee_id, store_id, 0.0)  # Replace `1` with the actual employee ID
             )
             return_transaction_id = self.cursor.lastrowid
 
@@ -698,6 +727,14 @@ class Database:
             self.cursor.execute(
                 "UPDATE transactions SET total_price = ? WHERE transaction_id = ?",
                 (-total_with_tax, return_transaction_id)
+            )
+
+            # Log the return in returns table
+            self.cursor.execute(
+                """INSERT INTO returns 
+                   (transaction_id, original_transaction_id, total_refund, store_id, employee_id)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (return_transaction_id, transaction_id, total_with_tax, store_id, employee_id)
             )
 
             # Update the store's balance
@@ -978,81 +1015,191 @@ class Database:
         result = self.cursor.fetchone()
         return result[0] if result else 0.0
 
-    def create_purchase(self, parts: List[PartSold], store_id: int, employee_id: int = 1) -> int:
+    def get_transaction_log(self, store_id: int = None, start_date: str = None, end_date: str = None):
         """
-        Create a purchase transaction for multiple parts.
-
+        Get a log of all transactions including return information.
+        
         Args:
-            parts (List[PartSold]): A list of `PartSold` objects, where each object contains:
-                                    - name: Part name (str)
-                                    - quantity: Quantity to purchase (int)
-                                    - unit_price: Unit price of the part (float)
-            store_id (int): The ID of the store where the purchase is made.
-            employee_id (int): The ID of the employee processing the purchase.
-
-        Returns:
-            int: The transaction ID of the created purchase.
+            store_id (int, optional): Filter by store ID
+            start_date (str, optional): Filter by start date (YYYY-MM-DD)
+            end_date (str, optional): Filter by end date (YYYY-MM-DD)
         """
         try:
-            # Get store's tax rate
-            tax_rate = self.get_store_tax_rate(store_id)
-            total_price = 0.0
-            transaction_id = None
+            query = """
+                SELECT 
+                    t.transaction_id,
+                    t.transaction_date,
+                    t.total_price,
+                    e.first_name || ' ' || e.last_name AS employee_name,
+                    s.store_name,
+                    CASE 
+                        WHEN r.return_id IS NOT NULL THEN 'Return'
+                        ELSE 'Purchase'
+                    END as transaction_type,
+                    r.original_transaction_id
+                FROM transactions t
+                JOIN employees e ON t.employee_id = e.id
+                JOIN stores s ON t.store_id = s.store_id
+                LEFT JOIN returns r ON t.transaction_id = r.transaction_id
+                WHERE 1=1
+            """
+            params = []
 
-            # Create a transaction
-            self.cursor.execute(
-                "INSERT INTO transactions (employee_id, store_id, total_price) VALUES (?, ?, ?)",
-                (employee_id, store_id, 0.0)
-            )
-            transaction_id = self.cursor.lastrowid
+            if store_id:
+                query += " AND t.store_id = ?"
+                params.append(store_id)
+            
+            if start_date:
+                query += " AND date(t.transaction_date) >= date(?)"
+                params.append(start_date)
+                
+            if end_date:
+                query += " AND date(t.transaction_date) <= date(?)"
+                params.append(end_date)
 
-            for part in parts:
-                # Fetch pno if not provided
-                self.cursor.execute("SELECT pno, quantity FROM parts WHERE name = ? AND store_id = ?", (part.name, store_id))
-                result = self.cursor.fetchone()
+            query += " ORDER BY t.transaction_date DESC"
 
-                if result:
-                    pno, current_quantity = result
+            self.cursor.execute(query, params)
+            transactions = self.cursor.fetchall()
 
-                    if current_quantity >= part.quantity:
-                        new_quantity = current_quantity - part.quantity
-                        part_total_price = part.unit_price * part.quantity
-                        total_price += part_total_price
+            # Format the results as a list of dictionaries
+            transaction_log = []
+            for t in transactions:
+                transaction_log.append({
+                    'transaction_id': t[0],
+                    'date': t[1],
+                    'total_price': t[2],
+                    'employee': t[3],
+                    'store': t[4],
+                    'type': t[5],
+                    'original_transaction_id': t[6]
+                })
 
-                        # Add transaction details
-                        self.cursor.execute(
-                            "INSERT INTO transaction_details (transaction_id, part_id, quantity) VALUES (?, ?, ?)",
-                            (transaction_id, pno, part.quantity)
-                        )
-
-                        # Update the quantity of the part in the store
-                        self.cursor.execute(
-                            "UPDATE parts SET quantity = ? WHERE pno = ? AND store_id = ?",
-                            (new_quantity, pno, store_id)
-                        )
-                    else:
-                        print(f"Insufficient quantity for part '{part.name}'. Available: {current_quantity}, Requested: {part.quantity}.")
-                else:
-                    print(f"Part '{part.name}' not found in store {store_id}.")
-
-            # Calculate tax
-            tax_amount = self.format_decimal(total_price * tax_rate)
-            total_with_tax = self.format_decimal(total_price + tax_amount)
-
-            # Update the total price of the transaction
-            self.cursor.execute(
-                "UPDATE transactions SET total_price = ? WHERE transaction_id = ?",
-                (total_with_tax, transaction_id)
-            )
-
-            # Update the store's balance
-            self.update_store_balance(store_id, total_with_tax, is_addition=True)
-
-            self.conn.commit()
-            print(f"Purchase transaction {transaction_id} completed. Subtotal: {total_price:.2f}, Tax: {tax_amount:.2f}, Total: {total_with_tax:.2f}")
-            return transaction_id
+            return transaction_log
 
         except sqlite3.Error as e:
-            print(f"Error creating purchase: {e}")
-            self.conn.rollback()
+            print(f"Error getting transaction log: {e}")
+            return []
+
+    def check_admin_access(self, employee_id: int) -> bool:
+        """Check if employee has admin role."""
+        try:
+            self.cursor.execute("SELECT role FROM employees WHERE id = ?", (employee_id,))
+            result = self.cursor.fetchone()
+            return result and result[0].lower() == 'admin'
+        except sqlite3.Error:
+            return False
+
+    def add_discount(self, name: str, discount_type: str, value: float, 
+                    description: str = None, start_date: str = None, 
+                    end_date: str = None, store_id: int = None) -> int:
+        """
+        Add a new discount.
+        
+        Args:
+            name: Name of the discount
+            discount_type: Either 'percentage' or 'fixed'
+            value: Discount value (percentage or fixed amount)
+            description: Optional description
+            start_date: Optional start date (YYYY-MM-DD)
+            end_date: Optional end date (YYYY-MM-DD)
+            store_id: Optional store ID for store-specific discounts
+        
+        Returns:
+            int: The ID of the created discount
+        """
+        try:
+            query = """
+            INSERT INTO discounts (name, description, discount_type, value, 
+                                 start_date, end_date, store_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """
+            self.cursor.execute(query, (name, description, discount_type, value,
+                                      start_date, end_date, store_id))
+            self.conn.commit()
+            return self.cursor.lastrowid
+        except sqlite3.Error as e:
+            print(f"Error creating discount: {e}")
             return None
+
+    def apply_discount_to_part(self, part_id: int, discount_id: int):
+        """Apply a discount to a specific part."""
+        try:
+            query = """
+            INSERT INTO part_discounts (part_id, discount_id)
+            VALUES (?, ?)
+            """
+            self.cursor.execute(query, (part_id, discount_id))
+            self.conn.commit()
+        except sqlite3.Error as e:
+            print(f"Error applying discount to part: {e}")
+
+    def get_active_discounts(self, store_id: int = None) -> list:
+        """Get all active discounts for a store."""
+        try:
+            query = """
+            SELECT discount_id, name, description, discount_type, value
+            FROM discounts
+            WHERE active = 1
+            AND (store_id IS NULL OR store_id = ?)
+            AND (end_date IS NULL OR date(end_date) >= date('now'))
+            AND (start_date IS NULL OR date(start_date) <= date('now'))
+            """
+            self.cursor.execute(query, (store_id,))
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Error fetching active discounts: {e}")
+            return []
+
+    def calculate_discount(self, original_price: float, discount_type: str, 
+                          discount_value: float) -> float:
+        """Calculate discounted price."""
+        if discount_type == 'percentage':
+            discount_amount = original_price * (discount_value / 100)
+        else:  # fixed amount
+            discount_amount = discount_value
+        
+        # Ensure discount doesn't make price negative
+        discount_amount = min(discount_amount, original_price)
+        return self.format_decimal(original_price - discount_amount)
+
+    def get_part_price_with_discount(self, part_id: int, store_id: int) -> tuple:
+        """
+        Get part price including any applicable discounts.
+        
+        Returns:
+            tuple: (final_price, original_price, discount_applied)
+        """
+        try:
+            # Get original price
+            self.cursor.execute(
+                "SELECT price FROM parts WHERE pno = ? AND store_id = ?", 
+                (part_id, store_id)
+            )
+            original_price = self.cursor.fetchone()[0]
+            
+            # Check for applicable discounts
+            query = """
+            SELECT d.discount_type, d.value
+            FROM discounts d
+            JOIN part_discounts pd ON d.discount_id = pd.discount_id
+            WHERE pd.part_id = ? AND d.active = 1
+            AND (d.store_id IS NULL OR d.store_id = ?)
+            AND (d.end_date IS NULL OR date(d.end_date) >= date('now'))
+            AND (d.start_date IS NULL OR date(d.start_date) <= date('now'))
+            ORDER BY d.value DESC
+            LIMIT 1
+            """
+            self.cursor.execute(query, (part_id, store_id))
+            discount = self.cursor.fetchone()
+            
+            if discount:
+                final_price = self.calculate_discount(
+                    original_price, discount[0], discount[1]
+                )
+                return (final_price, original_price, True)
+            
+            return (original_price, original_price, False)
+        except sqlite3.Error as e:
+            print(f"Error calculating discounted price: {e}")
+            return (original_price, original_price, False)
