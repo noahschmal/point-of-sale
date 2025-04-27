@@ -10,9 +10,9 @@ class POSApp:
         
         self.db = Database("pos_system.db")
         self.cart = {}
-        self.store_id = 1  # Default store ID; adjust as needed
-        self.selected_store_id = tk.IntVar(value=self.store_id)  # Variable to track selected store
-        self.selected_employee_id = tk.IntVar()  # Variable to track selected employee
+        self.store_id = None  # No store selected initially
+        self.selected_store_id = tk.StringVar(value="")  # Default to an empty string (no store displayed)
+        self.selected_employee_id = tk.StringVar(value="")  # Default to an empty string (no employee displayed)
         self.transactions = []  # Store transactions for the selected store
         
         self.create_store_selector()  # Add store selector dropdown
@@ -39,8 +39,7 @@ class POSApp:
         stores = self.db.get_stores()
         store_options = {store[0]: store[1] for store in stores}  # {store_id: store_name}
         self.store_combobox["values"] = [f"{store_id}: {store_name}" for store_id, store_name in store_options.items()]
-        if stores:
-            self.selected_store_id.set(stores[0][0])  # Default to the first store
+        self.selected_store_id.set("")  # No store displayed initially
 
     def on_store_change(self, event):
         """Handle store selection change."""
@@ -56,6 +55,7 @@ class POSApp:
         self.load_inventory_list()  # Reload inventory for the selected store
         self.load_transactions()  # Reload transactions for the selected store
         self.load_employees()  # Reload employees for the selected store
+        self.load_employee_combobox()  # Refresh the employee dropdown
         # Add logic to refresh other tabs (e.g., transactions) when implemented
     
     def create_employee_selector(self):
@@ -68,16 +68,51 @@ class POSApp:
 
         self.employee_combobox = ttk.Combobox(employee_selector_frame, textvariable=self.selected_employee_id, state="readonly")
         self.employee_combobox.pack(side=tk.LEFT, padx=5)
+        self.employee_combobox.bind("<<ComboboxSelected>>", self.authenticate_employee)  # Bind selection event
+
+        self.logout_button = ttk.Button(employee_selector_frame, text="Logout", command=self.logout_employee)
+        self.logout_button.pack(side=tk.LEFT, padx=5)  # Add the logout button next to the combobox
 
         self.load_employee_combobox()  # Populate the employee dropdown
 
     def load_employee_combobox(self):
         """Load employees into the employee selection combobox."""
         employees = self.db.get_employees()
-        employee_options = {employee[0]: f"{employee[1]} {employee[2]} ({employee[3]})" for employee in employees}  # {id: "First Last (Role)"}
+        employee_options = {employee[0]: f"{employee[1]} {employee[2]}" for employee in employees if employee[4] == self.store_id}  # {id: "First Last"}
         self.employee_combobox["values"] = [f"{emp_id}: {emp_name}" for emp_id, emp_name in employee_options.items()]
-        if employees:
-            self.selected_employee_id.set(employees[0][0])  # Default to the first employee
+        self.selected_employee_id.set("")  # No employee displayed initially
+
+    def authenticate_employee(self, event):
+        """Prompt for a password when an employee is selected."""
+        try:
+            # Extract the employee ID and name from the dropdown value
+            employee_data = self.employee_combobox.get().split(":")
+            employee_id = int(employee_data[0].strip())
+            employee_name = employee_data[1].strip()
+
+            # Prompt for the password
+            password = simpledialog.askstring("Authentication", f"Enter password for {employee_name}:", show="*")
+            if not password:
+                messagebox.showerror("Error", "Password is required.")
+                self.employee_combobox.set("")  # Clear the selection
+                return
+
+            # Verify the password
+            role, emp_id = self.db.employee_login(employee_name.split()[0], employee_name.split()[1], password)
+            if emp_id == employee_id:
+                self.selected_employee_id.set(employee_id)  # Set the authenticated employee ID
+                messagebox.showinfo("Success", f"Welcome, {employee_name}!")
+            else:
+                raise Exception("Authentication failed.")
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+            self.employee_combobox.set("")  # Clear the selection
+
+    def logout_employee(self):
+        """Logout the currently selected employee."""
+        self.selected_employee_id.set("")  # Clear the selected employee
+        self.employee_combobox.set("")  # Clear the combobox display
+        messagebox.showinfo("Logout", "Employee has been logged out.")
 
     def create_tabs(self):
         self.notebook = ttk.Notebook(self.root)
