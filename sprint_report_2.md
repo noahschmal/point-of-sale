@@ -1,5 +1,5 @@
 # Sprint x Report 
-Video Link: 
+Video Link: https://drive.google.com/file/d/1xjiiQIWAJQiGPB5HQ6Zsv3FnTmEoapQg/view?usp=sharing
 ## What's New (User Facing)
  * Added context menus to the checkout and inventory pages
  * Added the employee and another menu I forgot what it was
@@ -15,7 +15,7 @@ easily solved through the use of test driven delvelopment on the backend.
 
 ## Unfinished Work
 We were hoping to create a discount system which is currently in development on both the front and backend. There were also some UI improvements that are in
-active development.
+active development. These include the store taxes and product returns. Along with some quality things such as changing the selection of employees and stores.
 
 ## Completed Issues/User Stories
 Here are links to the issues that we completed in this sprint:
@@ -24,6 +24,8 @@ Here are links to the issues that we completed in this sprint:
  * https://github.com/users/noahschmal/projects/4/views/1?pane=issue&itemId=104948166&issue=noahschmal%7Cpoint-of-sale%7C12
  * https://github.com/users/noahschmal/projects/4/views/1?pane=issue&itemId=104948141&issue=noahschmal%7Cpoint-of-sale%7C11
  * https://github.com/users/noahschmal/projects/4/views/1?pane=issue&itemId=104948190&issue=noahschmal%7Cpoint-of-sale%7C13
+ * https://github.com/users/noahschmal/projects/4?pane=issue&itemId=105230048&issue=noahschmal%7Cpoint-of-sale%7C17
+ * https://github.com/users/noahschmal/projects/4/views/1?pane=issue&itemId=102434700&issue=noahschmal%7Cpoint-of-sale%7C7
 
  ## Incomplete Issues/User Stories
  Here are links to issues we worked on but did not complete in this sprint:
@@ -41,14 +43,15 @@ Please review the following code files, which were actively developed during thi
 Here's what went well:
   * Creation of transaction tracking
   * User interactivity
-  * 
+  * Implementing new features
  
 Here's what we'd like to improve:
    * Taxes: they are not very smoothly implemented and a reworked system for simplier tracking would be nice
-   * Item 2
-   * Item x
+   * Store reporting: ability to select certain dates of transactions
+
   
 Here are changes we plan to implement in the next sprint:
-   * Item 1
-   * Item 2
-   * Item x
+   * Implement front end password requirements
+   * UI reworks to make it looks better
+   * Better error handling
+   * Completion of functional requirements
