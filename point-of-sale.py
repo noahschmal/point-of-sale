@@ -1,6 +1,10 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox, simpledialog, filedialog
 from DataBase.Database import Database, Part, PartSold, TransactionDetails
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from datetime import datetime
+import pandas as pd
 
 class POSApp:
     def __init__(self, root):
@@ -675,31 +679,134 @@ class POSApp:
             messagebox.showerror("Error", "Checkout failed.")
 
     def generate_sales_report(self):
-        """Generate a sales report for the selected store."""
+        """Generate a sales report with visualizations for the selected store."""
         try:
             sales_report = self.db.SalesReport(self.store_id)
             if not sales_report:
                 messagebox.showinfo("Sales Report", "No transactions found for this store.")
                 return
 
+            # Create text report and collect data for visualization
             report = f"Sales Report for Store ID {self.store_id}\n\n"
+            dates = []
+            totals = []
+            items_sold = {}
+            
             for transaction in sales_report:
+                # Add transaction to text report
                 report += f"Transaction ID: {transaction.transaction_id}, Date: {transaction.date}, Total: ${transaction.total_price:.2f}, Employee: {transaction.employee}\n"
                 if getattr(transaction, "discount_name", None):
                     report += f"  Discount: {transaction.discount_name} (-${transaction.discount_amount:.2f})\n"
                 for part in transaction.parts_sold:
                     report += f"  - {part.name}: {part.quantity} @ ${part.unit_price:.2f} each (Total: ${part.total_price:.2f})\n"
                 report += "\n"
+                
+                # Collect data for visualization
+                date = datetime.strptime(transaction.date, '%Y-%m-%d %H:%M:%S')
+                dates.append(date)
+                totals.append(transaction.total_price)
+                
+                # Count items sold, handling returns properly
+                for part in transaction.parts_sold:
+                    # For returns, part.quantity will be negative, so we use abs()
+                    quantity = abs(part.quantity)
+                    if part.name in items_sold:
+                        items_sold[part.name] += quantity
+                    else:
+                        items_sold[part.name] = quantity
 
-            # Display the report in a new window
-            report_window = tk.Toplevel(self.root)
-            report_window.title("Sales Report")
-            report_text = tk.Text(report_window, wrap=tk.WORD)
+            # Create visualization window
+            viz_window = tk.Toplevel(self.root)
+            viz_window.title("Sales Report Visualization")
+            viz_window.geometry("1000x800")
+
+            # Create notebook for multiple charts
+            notebook = ttk.Notebook(viz_window)
+            notebook.pack(fill='both', expand=True)
+
+            # 1. Sales Over Time
+            fig1, ax1 = plt.subplots(figsize=(10, 5))
+            ax1.plot(dates, totals, marker='o')
+            ax1.set_title('Sales Over Time')
+            ax1.set_xlabel('Date')
+            ax1.set_ylabel('Sales ($)')
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            
+            time_frame = ttk.Frame(notebook)
+            notebook.add(time_frame, text='Sales Over Time')
+            canvas1 = FigureCanvasTkAgg(fig1, time_frame)
+            canvas1.draw()
+            canvas1.get_tk_widget().pack(fill='both', expand=True)
+
+            # 2. Top Items by Quantity - Updated visualization
+            fig2, ax2 = plt.subplots(figsize=(10, 5))
+            items_df = pd.DataFrame(list(items_sold.items()), columns=['Item', 'Quantity'])
+            items_df = items_df.nlargest(10, 'Quantity')  # Get top 10 by quantity
+            
+            # Create horizontal bar chart with absolute values
+            bars = ax2.barh(items_df['Item'], items_df['Quantity'], color='steelblue')
+            
+            # Customize the chart
+            ax2.set_title('Top 10 Items Sold by Quantity')
+            ax2.set_xlabel('Quantity Sold')
+            
+            # Add value labels on the bars with offset instead of padding
+            for bar in bars:
+                width = bar.get_width()
+                ax2.text(width + 0.5, bar.get_y() + bar.get_height()/2,
+                        f'{int(width):,}',
+                        ha='left', va='center', fontweight='bold')
+            
+            plt.tight_layout()
+
+            # Rest of the visualization code remains the same
+            items_frame = ttk.Frame(notebook)
+            notebook.add(items_frame, text='Top Items')
+            canvas2 = FigureCanvasTkAgg(fig2, items_frame)
+            canvas2.draw()
+            canvas2.get_tk_widget().pack(fill='both', expand=True)
+
+            # Add text report tab with save button
+            text_frame = ttk.Frame(notebook)
+            notebook.add(text_frame, text='Detailed Report')
+            
+            # Create button frame
+            button_frame = ttk.Frame(text_frame)
+            button_frame.pack(side='bottom', pady=5)
+            
+            # Create save button
+            save_button = ttk.Button(
+                button_frame, 
+                text="Save Report", 
+                command=lambda: self.save_report(report)
+            )
+            save_button.pack(side='left', padx=5)
+            
+            # Add report text
+            report_text = tk.Text(text_frame, wrap=tk.WORD)
             report_text.insert(tk.END, report)
             report_text.pack(expand=True, fill=tk.BOTH)
             report_text.config(state=tk.DISABLED)
+
         except Exception as e:
             print(f"Error generating sales report: {e}")
+            messagebox.showerror("Error", f"Failed to generate sales report: {str(e)}")
+
+    def save_report(self, report_text):
+        """Save the sales report to a text file."""
+        try:
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                title="Save Sales Report"
+            )
+            if file_path:
+                with open(file_path, 'w') as file:
+                    file.write(report_text)
+                messagebox.showinfo("Success", "Report saved successfully!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save report: {str(e)}")
 
     def load_transactions(self):
         """Load transactions for the selected store."""
