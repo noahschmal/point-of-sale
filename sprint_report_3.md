@@ -1,5 +1,5 @@
 # Sprint x Report 
-Video Link: 
+Video Link: https://youtu.be/QoV3qhFuOMs
 ## What's New (User Facing)
  * Discounts
  * Logout
