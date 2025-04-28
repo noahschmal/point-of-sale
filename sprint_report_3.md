@@ -15,6 +15,9 @@ The only functional requirement we didn't complete was a customer system. We dec
 
 ## Completed Issues/User Stories
 Here are links to the issues that we completed in this sprint:
+ * https://github.com/noahschmal/point-of-sale/issues/14
+ * https://github.com/noahschmal/point-of-sale/issues/26
+ * https://github.com/noahschmal/point-of-sale/issues/27
  * https://github.com/noahschmal/point-of-sale/issues/19
  * https://github.com/noahschmal/point-of-sale/issues/20
  * https://github.com/noahschmal/point-of-sale/issues/21
