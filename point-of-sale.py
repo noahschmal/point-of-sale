@@ -14,15 +14,14 @@ class POSApp:
         
         self.db = Database("pos_system.db")
         self.cart = {}
-        self.store_id = None  # No store selected initially
-        self.selected_store_id = tk.StringVar(value="")  # Default to an empty string (no store displayed)
-        self.selected_employee_id = tk.StringVar(value="")  # Default to an empty string (no employee displayed)
-        self.logged_in_employee_name = tk.StringVar(value="")  # Track logged-in employee name
-        self.transactions = []  # Store transactions for the selected store
+        self.store_id = None 
+        self.selected_store_id = tk.StringVar(value="")  
+        self.selected_employee_id = tk.StringVar(value="")  
+        self.logged_in_employee_name = tk.StringVar(value="") 
+        self.transactions = []  
         
         self.create_store_selector()
         self.create_employee_selector()
-        # --- Add label for logged-in employee ---
         self.employee_name_label = ttk.Label(self.root, textvariable=self.logged_in_employee_name, font=("Arial", 10, "italic"))
         self.employee_name_label.pack(anchor="ne", padx=10, pady=2)
         self.create_tabs()
@@ -40,14 +39,14 @@ class POSApp:
         self.store_combobox.pack(side=tk.LEFT, padx=5)
         self.store_combobox.bind("<<ComboboxSelected>>", self.on_store_change)  # Bind store change event
 
-        self.load_store_combobox()  # Populate the store dropdown
+        self.load_store_combobox() 
 
     def load_store_combobox(self):
         """Load stores into the store selection combobox."""
         stores = self.db.get_stores()
         store_options = {store[0]: store[1] for store in stores}  # {store_id: store_name}
         self.store_combobox["values"] = [f"{store_id}: {store_name}" for store_id, store_name in store_options.items()]
-        self.selected_store_id.set("")  # No store displayed initially
+        self.selected_store_id.set("") 
 
     def on_store_change(self, event):
         """Handle store selection change."""
@@ -59,15 +58,13 @@ class POSApp:
             messagebox.showerror("Error", "Please select a valid store.")
             return
 
-        self.load_items()  # Reload items for the selected store
-        self.load_inventory_list()  # Reload inventory for the selected store
-        self.load_transactions()  # Reload transactions for the selected store
-        self.load_employees()  # Reload employees for the selected store
-        self.load_employee_combobox()  # Refresh the employee dropdown
-        # --- Refresh discounts for sales tab ---
+        self.load_items()  # Update items for the selected store
+        self.load_inventory_list()  # Update inventory for the selected store
+        self.load_transactions()  # Update transactions for the selected store
+        self.load_employees()  # Update employees for the selected store
+        self.load_employee_combobox()  # Update the employee dropdown
         self.load_sales_discounts()
         self.update_cart_display()
-        # Add logic to refresh other tabs (e.g., transactions) when implemented
     
     def create_employee_selector(self):
         """Create a dropdown to select the employee."""
@@ -82,46 +79,40 @@ class POSApp:
         self.employee_combobox.bind("<<ComboboxSelected>>", self.authenticate_employee)  # Bind selection event
 
         self.logout_button = ttk.Button(employee_selector_frame, text="Logout", command=self.logout_employee)
-        self.logout_button.pack(side=tk.LEFT, padx=5)  # Add the logout button next to the combobox
+        self.logout_button.pack(side=tk.LEFT, padx=5)
 
-        self.load_employee_combobox()  # Populate the employee dropdown
+        self.load_employee_combobox()
 
     def load_employee_combobox(self):
         """Load employees into the employee selection combobox."""
         employees = self.db.get_employees()
         employee_options = {employee[0]: f"{employee[1]} {employee[2]}" for employee in employees if employee[4] == self.store_id}
-        # Show "Name (ID: X)" in dropdown for clarity
         self.employee_combobox["values"] = [f"{emp_name} (ID: {emp_id})" for emp_id, emp_name in employee_options.items()]
         self.selected_employee_id.set("")  # No employee displayed initially
 
     def authenticate_employee(self, event):
         """Prompt for a password when an employee is selected."""
         try:
-            # Extract the employee name and ID from the dropdown value
             combo_val = self.employee_combobox.get()
             if "(ID:" in combo_val:
                 name_part, id_part = combo_val.rsplit(" (ID:", 1)
                 employee_name = name_part.strip()
                 employee_id = int(id_part.replace(")", "").strip())
             else:
-                # fallback for old format
                 employee_data = combo_val.split(":")
                 employee_id = int(employee_data[0].strip())
                 employee_name = employee_data[1].strip()
 
-            # Prompt for the password
             password = simpledialog.askstring("Authentication", f"Enter password for {employee_name}:", show="*")
             if not password:
                 messagebox.showerror("Error", "Password is required.")
-                self.employee_combobox.set("")  # Clear the selection
+                self.employee_combobox.set("")
                 return
 
-            # Verify the password
             first, last = employee_name.split(" ", 1)
             role, emp_id = self.db.employee_login(first, last, password)
             if emp_id == employee_id:
-                # Set the combobox display to the name (not just the ID)
-                self.selected_employee_id.set(str(employee_id))  # Only set to the ID as string
+                self.selected_employee_id.set(str(employee_id)) 
                 self.employee_combobox.set(f"{employee_name} (ID: {employee_id})")
                 self.logged_in_employee_name.set(f"Logged in as: {employee_name}")
                 messagebox.showinfo("Success", f"Welcome, {employee_name}!")
@@ -129,13 +120,13 @@ class POSApp:
                 raise Exception("Authentication failed.")
         except Exception as e:
             messagebox.showerror("Error", str(e))
-            self.employee_combobox.set("")  # Clear the selection
+            self.employee_combobox.set("") 
             self.logged_in_employee_name.set("")
 
     def logout_employee(self):
         """Logout the currently selected employee."""
-        self.selected_employee_id.set("")  # Clear the selected employee
-        self.employee_combobox.set("")  # Clear the combobox display
+        self.selected_employee_id.set("") 
+        self.employee_combobox.set("")
         self.logged_in_employee_name.set("")
         messagebox.showinfo("Logout", "Employee has been logged out.")
 
@@ -147,15 +138,14 @@ class POSApp:
         self.store_frame = ttk.Frame(self.notebook)
         self.transactions_frame = ttk.Frame(self.notebook)
         self.employees_frame = ttk.Frame(self.notebook)
-        self.discounts_frame = ttk.Frame(self.notebook)  # Add discounts tab
+        self.discounts_frame = ttk.Frame(self.notebook) 
         
         self.notebook.add(self.sales_frame, text="Sales")
         self.notebook.add(self.inventory_frame, text="Inventory")
         self.notebook.add(self.store_frame, text="Stores")
         self.notebook.add(self.transactions_frame, text="Transactions")
         self.notebook.add(self.employees_frame, text="Employees")
-        self.notebook.add(self.discounts_frame, text="Discounts")  # Add discounts tab to notebook
-        
+        self.notebook.add(self.discounts_frame, text="Discounts")         
         self.notebook.pack(expand=True, fill="both")
         
         self.create_sales_tab()
@@ -163,7 +153,7 @@ class POSApp:
         self.create_store_tab()
         self.create_transactions_tab()
         self.create_employees_tab()
-        self.create_discounts_tab()  # Initialize discounts tab
+        self.create_discounts_tab()
     
     def create_sales_tab(self):
         self.label = ttk.Label(self.sales_frame, text="Select Item:")
@@ -172,7 +162,7 @@ class POSApp:
         self.item_var = tk.StringVar()
         self.item_combobox = ttk.Combobox(self.sales_frame, textvariable=self.item_var)
         self.item_combobox.pack(pady=5)
-        self.item_combobox.bind("<<ComboboxSelected>>", self.populate_item_id)  # Bind selection event
+        self.item_combobox.bind("<<ComboboxSelected>>", self.populate_item_id) 
         
         self.item_id_label = ttk.Label(self.sales_frame, text="Or Enter Item ID:")
         self.item_id_label.pack(pady=5)
@@ -186,28 +176,25 @@ class POSApp:
         self.quantity_entry = ttk.Entry(self.sales_frame)
         self.quantity_entry.pack(pady=5)
 
-        # --- Discount Selector ---
         self.discount_var = tk.StringVar()
         self.discount_label = ttk.Label(self.sales_frame, text="Apply Discount:")
         self.discount_label.pack(pady=5)
         self.discount_combobox = ttk.Combobox(self.sales_frame, textvariable=self.discount_var, state="readonly")
         self.discount_combobox.pack(pady=5)
         self.discount_combobox.bind("<<ComboboxSelected>>", lambda e: self.update_cart_display())
-        # -------------------------
 
         self.add_button = ttk.Button(self.sales_frame, text="Add to Cart", command=self.add_to_cart)
         self.add_button.pack(pady=5)
         
         self.cart_listbox = tk.Listbox(self.sales_frame)
         self.cart_listbox.pack(pady=5, fill=tk.BOTH, expand=True)
-        self.cart_listbox.bind("<Button-3>", self.show_cart_context_menu)  # Bind right-click event
+        self.cart_listbox.bind("<Button-3>", self.show_cart_context_menu) 
 
         self.total_label = ttk.Label(self.sales_frame, text="Total: $0.00", font=("Arial", 12, "bold"))
-        self.total_label.pack(pady=5)  # Add a label to display the total
+        self.total_label.pack(pady=5) 
         
         self.checkout_button = ttk.Button(self.sales_frame, text="Checkout", command=self.checkout)
         self.checkout_button.pack(pady=5)
-        # Show totals on app launch
         self.update_cart_display()
 
     def load_items(self):
@@ -215,7 +202,6 @@ class POSApp:
         parts = self.db.get_parts_by_store(self.store_id)
         self.items = {part.name: (part.price, part.quantity) for part in parts}  # {name: (price, quantity)}
         self.item_combobox["values"] = list(self.items.keys())
-        # --- Load discounts for the sales tab ---
         self.load_sales_discounts()
     
     def load_sales_discounts(self):
@@ -224,7 +210,6 @@ class POSApp:
         self.sales_discounts = {}  # {display: discount_tuple}
         discount_display_list = []
         for discount in discounts:
-            # discount: (id, name, description, type, value, ...)
             display = f"{discount[1]} ({discount[3]}: {discount[4]})"
             self.sales_discounts[display] = discount
             discount_display_list.append(display)
@@ -255,7 +240,7 @@ class POSApp:
         
         self.inventory_listbox = tk.Listbox(self.inventory_frame)
         self.inventory_listbox.pack(pady=5, fill=tk.BOTH, expand=True)
-        self.inventory_listbox.bind("<Button-3>", self.show_inventory_context_menu)  # Bind right-click event
+        self.inventory_listbox.bind("<Button-3>", self.show_inventory_context_menu)
         
         self.load_inventory_list()
     
@@ -266,18 +251,12 @@ class POSApp:
         self.store_name_entry = ttk.Entry(self.store_frame)
         self.store_name_entry.pack(pady=5)
 
-        # --- Remove Tax Rate Display ---
-        # self.tax_rate_var = tk.StringVar(value="Tax Rate: N/A")
-        # self.tax_rate_label = ttk.Label(self.store_frame, textvariable=self.tax_rate_var, font=("Arial", 10, "bold"))
-        # self.tax_rate_label.pack(pady=2)
-        # -------------------------------
-
         self.add_store_button = ttk.Button(self.store_frame, text="Add Store", command=self.add_store)
         self.add_store_button.pack(pady=5)
         
         self.store_listbox = tk.Listbox(self.store_frame)
         self.store_listbox.pack(pady=5, fill=tk.BOTH, expand=True)
-        self.store_listbox.bind("<Button-3>", self.show_store_context_menu)  # Add right-click context menu
+        self.store_listbox.bind("<Button-3>", self.show_store_context_menu)
         
         self.generate_report_button = ttk.Button(self.store_frame, text="Generate Sales Report", command=self.generate_sales_report)
         self.generate_report_button.pack(pady=5)
@@ -312,7 +291,6 @@ class POSApp:
         try:
             new_tax = simpledialog.askfloat("Set Tax Rate", f"Enter new tax rate for '{store_name}' (as a percentage, e.g., 8.5 for 8.5%):")
             if new_tax is not None and new_tax >= 0:
-                # Convert percentage to decimal for storage
                 self.db.cursor.execute("UPDATE stores SET tax_rate = ? WHERE store_id = ?", (round(new_tax / 100, 4), store_id))
                 self.db.conn.commit()
                 self.load_stores()
@@ -365,7 +343,6 @@ class POSApp:
     def process_return(self, transaction_id):
         """Process a return for the selected transaction."""
         try:
-            # Use the same employee ID extraction logic as checkout
             combo_val = self.employee_combobox.get()
             if "(ID:" in combo_val:
                 _, id_part = combo_val.rsplit(" (ID:", 1)
@@ -380,9 +357,9 @@ class POSApp:
             return_transaction_id = self.db.return_by_transaction_id(transaction_id, employee_id)
             if return_transaction_id:
                 messagebox.showinfo("Success", f"Return processed successfully. Return Transaction ID: {return_transaction_id}")
-                self.load_transactions()  # Refresh transactions
-                self.load_inventory_list()  # Refresh inventory
-                self.load_stores()  # Refresh store balances
+                self.load_transactions()  # Update transactions
+                self.load_inventory_list()  # Update inventory
+                self.load_stores()  # Update store balances
             else:
                 messagebox.showerror("Error", "Failed to process return.")
         except Exception as e:
@@ -487,7 +464,7 @@ class POSApp:
             messagebox.showinfo("Success", f"Item '{name}' added with quantity {quantity} at ${price:.2f}.")
             self.load_inventory_list()
             self.load_items()  # Update sales items list
-            self.load_stores()  # Refresh store inventory total
+            self.load_stores()  # Update store inventory total
             self.item_name_entry.delete(0, tk.END)
             self.item_price_entry.delete(0, tk.END)
             self.item_quantity_entry.delete(0, tk.END)
@@ -501,9 +478,9 @@ class POSApp:
             self.db.add_store(store_name)
             messagebox.showinfo("Success", "Store added successfully!")
             self.load_stores()
-            self.load_store_combobox()  # Refresh the store dropdown
+            self.load_store_combobox()
             stores = self.db.get_stores()
-            self.selected_store_id.set(stores[-1][0])  # Select the newly added store
+            self.selected_store_id.set(stores[-1][0]) 
         else:
             messagebox.showerror("Error", "Please enter a store name.")
     
@@ -520,12 +497,6 @@ class POSApp:
                 tk.END,
                 f"{store[1]} - Inventory Value: ${inventory_value:.2f} - Tax Rate: {tax_rate*100:.2f}%"
             )
-        # --- Remove tax rate label update ---
-        # if self.store_id:
-        #     tax_rate = self.db.get_store_tax_rate(self.store_id)
-        #     self.tax_rate_var.set(f"Tax Rate: {tax_rate*100:.2f}%")
-        # else:
-        #     self.tax_rate_var.set("Tax Rate: N/A")
 
     def calculate_inventory_value(self, store_id):
         """Calculate the total value of the inventory for a given store."""
@@ -545,9 +516,7 @@ class POSApp:
         quantity = int(quantity)
         
         if item_id.isdigit():
-            # Add item using manually entered item ID
             item_id = int(item_id)
-            # Use get_part_by_id instead of get_part_struct
             part = self.db.get_part_by_id(item_id)
             if not part:
                 messagebox.showerror("Error", "Item ID not found.")
@@ -559,9 +528,8 @@ class POSApp:
                 self.cart[part.name] += quantity
             else:
                 self.cart[part.name] = quantity
-            self.items[part.name] = (part.price, part.quantity)  # Ensure item is in the items dictionary
+            self.items[part.name] = (part.price, part.quantity)
         elif selected_item:
-            # Add item using dropdown selection
             available_quantity = self.items[selected_item][1]
             if quantity > available_quantity:
                 messagebox.showerror("Error", "Not enough stock available.")
@@ -584,7 +552,6 @@ class POSApp:
             total_price = self.items[item][0] * quantity
             subtotal += total_price
             self.cart_listbox.insert(tk.END, f"{item} x{quantity} - ${total_price:.2f}")
-        # --- Apply discount if selected ---
         discount_display = self.discount_var.get()
         discount_amount = 0
         if hasattr(self, "sales_discounts") and discount_display and discount_display != "No Discount":
@@ -600,7 +567,6 @@ class POSApp:
         tax_rate = self.db.get_store_tax_rate(self.store_id) or 0.0
         tax_amount = round(discounted_subtotal * tax_rate, 2)
         total = round(discounted_subtotal + tax_amount, 2)
-        # Show both subtotal and total, and discount if applied
         if discount_amount > 0:
             self.total_label.config(
                 text=f"Subtotal: ${subtotal:.2f}   Discount: -${discount_amount:.2f}   Tax: ${tax_amount:.2f}   Total: ${total:.2f}"
@@ -613,7 +579,6 @@ class POSApp:
     def checkout(self):
         """Process the checkout and update the database."""
         try:
-            # Try to get the logged-in employee ID from combobox
             combo_val = self.employee_combobox.get()
             if "(ID:" in combo_val:
                 _, id_part = combo_val.rsplit(" (ID:", 1)
@@ -655,11 +620,10 @@ class POSApp:
                 elif dtype.lower() == "fixed":
                     discount_amount = min(round(dval, 2), subtotal)
         discounted_subtotal = max(subtotal - discount_amount, 0)
-        tax_rate = self.db.get_store_tax_rate(self.store_id) or 0.0  # Fetch tax rate for the store, default to 0.0
+        tax_rate = self.db.get_store_tax_rate(self.store_id) or 0.0 # Default to 0.0
         tax_amount = round(discounted_subtotal * tax_rate, 2)
         total = round(discounted_subtotal + tax_amount, 2)
 
-        # --- Pass discount_id to create_purchase ---
         transaction_id = self.db.create_purchase(parts_sold, self.store_id, employee_id=employee_id, discount_id=discount_id)
         if transaction_id:
             receipt = f"Subtotal: ${subtotal:.2f}\n"
@@ -669,11 +633,10 @@ class POSApp:
             messagebox.showinfo("Total", receipt)
             self.cart.clear()
             self.update_cart_display()
-            self.load_items()  # Refresh items after purchase
+            self.load_items()  # Update items after purchase
             self.load_inventory_list()  # Update inventory tab after checkout
             self.load_transactions()  # Update transactions tab after checkout
             self.load_stores()  # Update store tab after checkout
-            # Reset discount selection after checkout
             self.discount_var.set("No Discount")
         else:
             messagebox.showerror("Error", "Checkout failed.")
@@ -686,14 +649,12 @@ class POSApp:
                 messagebox.showinfo("Sales Report", "No transactions found for this store.")
                 return
 
-            # Create text report and collect data for visualization
             report = f"Sales Report for Store ID {self.store_id}\n\n"
             dates = []
             totals = []
             items_sold = {}
             
             for transaction in sales_report:
-                # Add transaction to text report
                 report += f"Transaction ID: {transaction.transaction_id}, Date: {transaction.date}, Total: ${transaction.total_price:.2f}, Employee: {transaction.employee}\n"
                 if getattr(transaction, "discount_name", None):
                     report += f"  Discount: {transaction.discount_name} (-${transaction.discount_amount:.2f})\n"
@@ -701,30 +662,24 @@ class POSApp:
                     report += f"  - {part.name}: {part.quantity} @ ${part.unit_price:.2f} each (Total: ${part.total_price:.2f})\n"
                 report += "\n"
                 
-                # Collect data for visualization
                 date = datetime.strptime(transaction.date, '%Y-%m-%d %H:%M:%S')
                 dates.append(date)
                 totals.append(transaction.total_price)
                 
-                # Count items sold, handling returns properly
                 for part in transaction.parts_sold:
-                    # For returns, part.quantity will be negative, so we use abs()
                     quantity = abs(part.quantity)
                     if part.name in items_sold:
                         items_sold[part.name] += quantity
                     else:
                         items_sold[part.name] = quantity
 
-            # Create visualization window
             viz_window = tk.Toplevel(self.root)
             viz_window.title("Sales Report Visualization")
             viz_window.geometry("1000x800")
 
-            # Create notebook for multiple charts
             notebook = ttk.Notebook(viz_window)
             notebook.pack(fill='both', expand=True)
 
-            # 1. Sales Over Time
             fig1, ax1 = plt.subplots(figsize=(10, 5))
             ax1.plot(dates, totals, marker='o')
             ax1.set_title('Sales Over Time')
@@ -739,19 +694,15 @@ class POSApp:
             canvas1.draw()
             canvas1.get_tk_widget().pack(fill='both', expand=True)
 
-            # 2. Top Items by Quantity - Updated visualization
             fig2, ax2 = plt.subplots(figsize=(10, 5))
             items_df = pd.DataFrame(list(items_sold.items()), columns=['Item', 'Quantity'])
             items_df = items_df.nlargest(10, 'Quantity')  # Get top 10 by quantity
             
-            # Create horizontal bar chart with absolute values
             bars = ax2.barh(items_df['Item'], items_df['Quantity'], color='steelblue')
             
-            # Customize the chart
             ax2.set_title('Top 10 Items Sold by Quantity')
             ax2.set_xlabel('Quantity Sold')
             
-            # Add value labels on the bars with offset instead of padding
             for bar in bars:
                 width = bar.get_width()
                 ax2.text(width + 0.5, bar.get_y() + bar.get_height()/2,
@@ -760,22 +711,18 @@ class POSApp:
             
             plt.tight_layout()
 
-            # Rest of the visualization code remains the same
             items_frame = ttk.Frame(notebook)
             notebook.add(items_frame, text='Top Items')
             canvas2 = FigureCanvasTkAgg(fig2, items_frame)
             canvas2.draw()
             canvas2.get_tk_widget().pack(fill='both', expand=True)
 
-            # Add text report tab with save button
             text_frame = ttk.Frame(notebook)
             notebook.add(text_frame, text='Detailed Report')
             
-            # Create button frame
             button_frame = ttk.Frame(text_frame)
             button_frame.pack(side='bottom', pady=5)
             
-            # Create save button
             save_button = ttk.Button(
                 button_frame, 
                 text="Save Report", 
@@ -783,7 +730,6 @@ class POSApp:
             )
             save_button.pack(side='left', padx=5)
             
-            # Add report text
             report_text = tk.Text(text_frame, wrap=tk.WORD)
             report_text.insert(tk.END, report)
             report_text.pack(expand=True, fill=tk.BOTH)
@@ -829,7 +775,6 @@ class POSApp:
         self.discount_type_label = ttk.Label(self.discounts_frame, text="Discount Type:")
         self.discount_type_label.pack(pady=5)
 
-        # --- Use radio buttons for discount type selection ---
         self.discount_type_var = tk.StringVar(value="percentage")
         discount_type_frame = ttk.Frame(self.discounts_frame)
         discount_type_frame.pack(pady=5)
@@ -841,7 +786,6 @@ class POSApp:
             discount_type_frame, text="Fixed", variable=self.discount_type_var, value="fixed"
         )
         self.discount_fixed_radio.pack(side=tk.LEFT, padx=5)
-        # -----------------------------------------------------
 
         self.discount_value_label = ttk.Label(self.discounts_frame, text="Discount Value:")
         self.discount_value_label.pack(pady=5)
@@ -869,14 +813,12 @@ class POSApp:
 
         self.discounts_listbox = tk.Listbox(self.discounts_frame)
         self.discounts_listbox.pack(pady=5, fill=tk.BOTH, expand=True)
-        # --- Add right-click context menu binding ---
         self.discounts_listbox.bind("<Button-3>", self.show_discount_context_menu)
         self.load_discounts()
 
     def add_discount(self):
         """Add a new discount using the backend Database.py system."""
         name = self.discount_name_entry.get()
-        # Use the radio button value for discount type
         discount_type = self.discount_type_var.get()
         value = self.discount_value_entry.get()
         start_date = self.discount_start_entry.get().strip() or None
@@ -905,9 +847,8 @@ class POSApp:
         if discount_id:
             messagebox.showinfo("Success", f"Discount '{name}' added successfully.")
             self.load_discounts()
-            self.load_sales_discounts()  # Add this line to refresh sales tab discounts
+            self.load_sales_discounts()
             self.discount_name_entry.delete(0, tk.END)
-            # Reset radio button to default
             self.discount_type_var.set("percentage")
             self.discount_value_entry.delete(0, tk.END)
             self.discount_start_entry.delete(0, tk.END)
@@ -930,7 +871,6 @@ class POSApp:
         """Populate the item ID entry box based on the selected item in the dropdown."""
         selected_item = self.item_var.get()
         if selected_item in self.items:
-            # Find the part by name and store
             parts = self.db.get_parts_by_store(self.store_id)
             for part in parts:
                 if part.name == selected_item:
@@ -1059,7 +999,6 @@ class POSApp:
             self.discounts_listbox.selection_clear(0, tk.END)
             self.discounts_listbox.selection_set(selected_index)
             selected_discount = self.discounts_listbox.get(selected_index)
-            # Find the discount id by matching the name and type/value
             discount_name = selected_discount.split(" - ")[0].strip()
             discounts = self.db.get_active_discounts(self.store_id)
             discount_id = None
