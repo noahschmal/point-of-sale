@@ -3,7 +3,6 @@ import bcrypt
 from dataclasses import dataclass
 from typing import List
 
-# all data structs used in the database
 @dataclass
 class PartSold:
     name: str
@@ -49,7 +48,6 @@ class Part:
     store_id: int
     quantity: int
 
-
 class Database:
     def __init__(self, db_name):
         """
@@ -65,8 +63,6 @@ class Database:
     def connect(self):
         """Create a connection to the SQLite database."""
         conn = sqlite3.connect(self.db_name)
-
-        # Enabling foreign key support (SQLite foreign key constraints are disabled by default)
         conn.execute('PRAGMA foreign_keys = ON')
         print(f"Successfully connected to the database: {self.db_name}")
         return conn
@@ -74,7 +70,7 @@ class Database:
     def create_tables(self):
         """Create tables if they don't already exist."""
         
-        # Create employees table with store_id
+        # Create employees table
         create_employee_table_query = """
         CREATE TABLE IF NOT EXISTS employees (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +83,7 @@ class Database:
         );
         """
         
-        # Create parts table with store_id and quantity
+        # Create parts table
         create_parts_table_query = """
         CREATE TABLE IF NOT EXISTS parts (
             pno INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,7 +105,7 @@ class Database:
         );
         """
     
-        # Create transactions table (ensure discount_id column exists)
+        # Create transactions table 
         create_transactions_table_query = """
         CREATE TABLE IF NOT EXISTS transactions (
             transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,7 +120,7 @@ class Database:
         );
         """
     
-        # Create transaction_details table to store sold parts
+        # Create transaction_details table
         create_transaction_details_table_query = """
         CREATE TABLE IF NOT EXISTS transaction_details (
             transaction_detail_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,19 +191,17 @@ class Database:
         );
         """
         try:
-            # Execute all table creation queries
             self.cursor.execute(create_stores_table_query)  
             self.cursor.execute(create_employee_table_query)
             self.cursor.execute(create_parts_table_query)
             self.cursor.execute(create_transactions_table_query)
             self.cursor.execute(create_transaction_details_table_query)
             self.cursor.execute(create_trigger_update_total_price)
-            self.cursor.execute(create_returns_table_query)  # Add this line
+            self.cursor.execute(create_returns_table_query)
             self.cursor.execute(create_discounts_table_query)
             self.cursor.execute(create_part_discounts_table_query)
             self.conn.commit()
             print("Tables are ready.")
-            # --- Ensure discount_id column exists in transactions table ---
             self.ensure_discount_id_column()
         except sqlite3.Error as e:
             print(f"Error creating tables: {e}")
@@ -269,7 +263,7 @@ class Database:
         except sqlite3.IntegrityError:
             raise Exception("Error creating employee. Possible duplicate or invalid data.")
 
-    # Add a part to a store with a specified quantity and return the generated pno
+    # Add a part to a store 
     def add_part_to_store(self, name, price, store_id, quantity):
         """
         Add a part to a store with a specified quantity.
@@ -406,7 +400,7 @@ class Database:
                     # Create a transaction
                     self.cursor.execute(
                         "INSERT INTO transactions (employee_id, store_id, total_price) VALUES (?, ?, ?)",
-                        (1, store_id, total_price)  # Replace `1` with the actual employee ID
+                        (1, store_id, total_price)  
                     )
                     transaction_id = self.cursor.lastrowid
 
@@ -478,7 +472,7 @@ class Database:
             # Create a transaction
             self.cursor.execute(
                 "INSERT INTO transactions (employee_id, store_id, total_price) VALUES (?, ?, ?)",
-                (1, store_id, 0.0)  # Replace `1` with the actual employee ID
+                (1, store_id, 0.0)  
             )
             transaction_id = self.cursor.lastrowid
 
@@ -691,7 +685,7 @@ class Database:
             # Create a new return transaction
             self.cursor.execute(
                 "INSERT INTO transactions (employee_id, store_id, total_price, discount_id) VALUES (?, ?, ?, ?)",
-                (employee_id, store_id, 0.0, transaction_details.discount_id)  # Include discount_id from original
+                (employee_id, store_id, 0.0, transaction_details.discount_id)  
             )
             return_transaction_id = self.cursor.lastrowid
 
@@ -802,7 +796,6 @@ class Database:
 
     def get_transaction_details(self, transaction_id) -> TransactionDetails:
         """Fetches and returns all details of a specific transaction as a structured object."""
-        # Fetch transaction details (include discount_id)
         transaction_query = """
         SELECT t.transaction_id, t.transaction_date, t.total_price, 
                e.first_name || ' ' || e.last_name AS employee_name, 
@@ -1189,10 +1182,9 @@ class Database:
         """Calculate discounted price."""
         if discount_type == 'percentage':
             discount_amount = original_price * (discount_value / 100)
-        else:  # fixed amount
+        else:  
             discount_amount = discount_value
         
-        # Ensure discount doesn't make price negative
         discount_amount = min(discount_amount, original_price)
         return self.format_decimal(original_price - discount_amount)
 
